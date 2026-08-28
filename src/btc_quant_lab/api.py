@@ -10,10 +10,17 @@ from btc_quant_lab.config import settings
 from btc_quant_lab.data.store import Store
 from btc_quant_lab.experiments import list_experiments, record_experiment
 from btc_quant_lab.models import PivotConfig
+from btc_quant_lab.research.analytics import (
+    buy_and_hold_benchmark,
+    strategy_vs_buy_hold,
+    yearly_performance,
+)
 from btc_quant_lab.research.backtest import reversal_backtest, trade_dicts
 from btc_quant_lab.research.features import build_feature_rows, summarize_feature_outcomes
+from btc_quant_lab.research.montecarlo import bootstrap_trade_paths
 from btc_quant_lab.research.optimizer import optimize
 from btc_quant_lab.research.pivots import detect_pivots
+from btc_quant_lab.research.sensitivity import parameter_sensitivity
 from btc_quant_lab.research.walkforward import walk_forward
 from btc_quant_lab.service import sync_market
 
@@ -120,6 +127,38 @@ def features(
     }
 
 
+@app.get("/api/robustness")
+def robustness(
+    symbol: str = "BTCUSDT",
+    interval: str = "1d",
+    motor: str = "M1",
+    range_mode: str = "R8",
+    min_bars: int = 3,
+    max_pending: int = 3,
+    simulations: int = 2000,
+):
+    df = _load(symbol, interval)
+    cfg = _config(motor, range_mode, min_bars, max_pending)
+    signals = detect_pivots(df, cfg)
+    trades, metrics = reversal_backtest(signals)
+    benchmark = buy_and_hold_benchmark(df)
+    result = {
+        "config": {
+            "motor": motor,
+            "range_mode": range_mode,
+            "min_bars": min_bars,
+            "max_pending": max_pending,
+        },
+        "metrics": metrics,
+        "yearly": yearly_performance(trades),
+        "benchmark": benchmark,
+        "comparison": strategy_vs_buy_hold(metrics, benchmark),
+        "sensitivity": parameter_sensitivity(df, min_trades=max(10, min(20, len(trades)))),
+        "monte_carlo": bootstrap_trade_paths(trades, simulations=simulations) if trades else None,
+    }
+    return result
+
+
 @app.post("/api/optimize")
 def run_optimize(symbol: str = "BTCUSDT", interval: str = "1d", min_trades: int = 20):
     df = _load(symbol, interval)
@@ -196,6 +235,9 @@ async def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
         "candles": len(df),
         "objective": "capturar movimientos sostenidos de BTC con señales operables de reversión",
         "top_configurations_in_sample": rows[:10],
+        "parameter_sensitivity": parameter_sensitivity(
+            df, min_trades=max(10, settings.bqr_ai_min_trades // 2)
+        ),
         "walk_forward": {
             "method": wf.get("method"),
             "aggregate": wf.get("aggregate"),
