@@ -24,6 +24,8 @@ from btc_quant_lab.research.filters import filter_signals, validate_filter_spec
 from btc_quant_lab.research.montecarlo import bootstrap_trade_paths
 from btc_quant_lab.research.optimizer import optimize
 from btc_quant_lab.research.pivots import detect_pivots
+from btc_quant_lab.research.promotion import assess_promotion, write_promotion_manifest
+from btc_quant_lab.research.regime_validation import validate_by_regime
 from btc_quant_lab.research.sensitivity import parameter_sensitivity
 from btc_quant_lab.research.walkforward import evaluate_fixed_config, purged_walk_forward
 
@@ -75,6 +77,22 @@ def _config_dict(cfg: PivotConfig) -> dict:
     }
 
 
+def _regime_evidence(
+    df: pl.DataFrame,
+    signals,
+    trades,
+    min_trades: int,
+) -> dict:
+    return validate_by_regime(
+        df,
+        signals,
+        trades,
+        simulations=300,
+        min_bootstrap_trades=max(5, min_trades // 2),
+        block_size=4,
+    )
+
+
 def _evaluate_candidate(
     df: pl.DataFrame,
     cfg: PivotConfig,
@@ -112,6 +130,7 @@ def _evaluate_candidate(
         "out_of_sample": oos,
         "robustness_score": robustness_score(oos["aggregate"], min_trades=min_trades),
         "feature_summary": summarize_feature_outcomes(build_feature_rows(df, signals, trades)),
+        "regime_validation": _regime_evidence(df, signals, trades, min_trades),
         "yearly": yearly_performance(trades),
         "benchmark": benchmark,
         "vs_buy_hold": strategy_vs_buy_hold(full_metrics, benchmark),
@@ -157,6 +176,7 @@ def _evaluate_code_candidate(
         "out_of_sample": oos,
         "robustness_score": robustness_score(oos["aggregate"], min_trades=min_trades),
         "feature_summary": summarize_feature_outcomes(build_feature_rows(df, signals, trades)),
+        "regime_validation": _regime_evidence(df, signals, trades, min_trades),
         "yearly": yearly_performance(trades),
         "benchmark": benchmark,
         "vs_buy_hold": strategy_vs_buy_hold(full_metrics, benchmark),
@@ -170,6 +190,16 @@ def _compact_purged_reference(purged_reference: dict) -> dict:
         "aggregate": purged_reference.get("aggregate"),
         "selection_frequency": purged_reference.get("selection_frequency"),
         "recent_windows": purged_reference.get("windows", [])[-3:],
+    }
+
+
+def _compact_regime_validation(item: dict) -> dict:
+    groups = item.get("regime_validation", {}).get("groups", {})
+    return {
+        "signal_context": groups.get("signal_context"),
+        "trend_contradiction_score": groups.get("trend_contradiction_score"),
+        "market_structure": groups.get("market_structure"),
+        "structure_break": groups.get("structure_break"),
     }
 
 
@@ -189,6 +219,7 @@ def _critic_payload(
             "full_history": item.get("full_history"),
             "oos_aggregate": item.get("out_of_sample", {}).get("aggregate"),
             "feature_summary": item.get("feature_summary"),
+            "regime_validation": _compact_regime_validation(item),
             "vs_buy_hold": item.get("vs_buy_hold"),
             "monte_carlo": item.get("monte_carlo"),
             "yearly": item.get("yearly"),
@@ -200,8 +231,8 @@ def _critic_payload(
         "parameter_sensitivity": sensitivity.get("plateau"),
         "purged_embargo_reference": _compact_purged_reference(purged_reference),
         "rule": (
-            "approve only if evidence suggests a robust improvement; penalize boundary-sensitive "
-            "or structure-contradicting rules even when in-sample return improves"
+            "approve only if evidence suggests a robust improvement; penalize boundary-sensitive, "
+            "regime-concentrated or structure-contradicting rules even when global return improves"
         ),
     }
 
@@ -237,6 +268,7 @@ def _evaluate_final_holdout(
     ]
     metrics = metrics_from_trades(holdout_trades)
     holdout_df = full_df.slice(holdout_start_index, len(full_df) - holdout_start_index)
+    holdout_signals = [signal for signal in signals if int(signal.ts) >= start_ts]
     benchmark = buy_and_hold_benchmark(holdout_df)
     return {
         "start_ts": start_ts,
@@ -247,6 +279,14 @@ def _evaluate_final_holdout(
         "yearly": yearly_performance(holdout_trades),
         "benchmark": benchmark,
         "vs_buy_hold": strategy_vs_buy_hold(metrics, benchmark),
+        "regime_validation": validate_by_regime(
+            full_df,
+            holdout_signals,
+            holdout_trades,
+            simulations=500,
+            min_bootstrap_trades=5,
+            block_size=4,
+        ),
         "monte_carlo": (
             bootstrap_trade_paths(holdout_trades, simulations=2000)
             if holdout_trades
@@ -359,6 +399,7 @@ async def run_autonomous_research(
                 "minimum_oos_trades": min_trades,
                 "critic_must_approve": True,
                 "critic_must_consider_purged_embargo_reference": True,
+                "critic_must_consider_regime_concentration": True,
                 "final_holdout_must_remain_hidden_until_iterations_finish": True,
                 "same_cost_model_for_all_candidates": True,
                 "stable_branch_is_immutable": True,
@@ -444,7 +485,7 @@ async def run_autonomous_research(
                     "purged_embargo_reference": _compact_purged_reference(purged_reference),
                     "decision_rule": (
                         "development OOS robustness must improve; critic must approve after "
-                        "reviewing purged/embargo evidence"
+                        "reviewing purged/embargo and regime evidence"
                     ),
                 }
             )
@@ -470,22 +511,53 @@ async def run_autonomous_research(
         fee_bps,
         slippage_bps,
     )
+    protocol = {
+        "total_bars": len(df),
+        "development_bars": len(development_df),
+        "final_holdout_bars": holdout_bars,
+        "holdout_exposed_during_research": False,
+        "purge_bars": purge_bars,
+        "embargo_bars": embargo_bars,
+        "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
+    }
+    promotion_assessment = assess_promotion(
+        champion,
+        final_holdout,
+        protocol,
+        parameter_sensitivity=sensitivity,
+        min_development_trades=min_trades,
+        min_holdout_trades=max(5, min_trades // 2),
+    )
+    promotion_candidate = write_promotion_manifest(
+        champion,
+        final_holdout,
+        protocol,
+        promotion_assessment,
+        symbol=symbol,
+        interval=interval,
+    )
+    record_experiment(
+        {
+            "kind": "promotion_assessment",
+            "status": promotion_assessment["status"],
+            "symbol": symbol,
+            "interval": interval,
+            "promotion_id": promotion_candidate["promotion_id"],
+            "gates": promotion_assessment["gates"],
+            "failed_gates": promotion_assessment["failed_gates"],
+            "warnings": promotion_assessment["warnings"],
+        }
+    )
+
     return {
         "symbol": symbol,
         "interval": interval,
         "iterations": iterations,
-        "protocol": {
-            "total_bars": len(df),
-            "development_bars": len(development_df),
-            "final_holdout_bars": holdout_bars,
-            "holdout_exposed_during_research": False,
-            "purge_bars": purge_bars,
-            "embargo_bars": embargo_bars,
-            "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
-        },
+        "protocol": protocol,
         "champion": champion,
         "parameter_sensitivity": sensitivity,
         "purged_embargo_reference": _compact_purged_reference(purged_reference),
         "evaluations": outcomes,
         "final_holdout": final_holdout,
+        "promotion_candidate": promotion_candidate,
     }
