@@ -1,5 +1,3 @@
-import math
-
 import polars as pl
 
 from btc_quant_lab.models import PivotSignal, Trade
