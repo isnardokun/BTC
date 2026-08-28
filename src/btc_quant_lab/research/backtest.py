@@ -12,6 +12,13 @@ def trade_return_pct(direction: int, entry: float, exit_price: float) -> float:
     return (entry - exit_price) / entry * 100.0
 
 
+def round_trip_cost_pct(fee_bps: float = 0.0, slippage_bps: float = 0.0) -> float:
+    """Approximate entry+exit execution drag in percentage points."""
+    if fee_bps < 0 or slippage_bps < 0:
+        raise ValueError("fees and slippage must be non-negative")
+    return 2.0 * (fee_bps + slippage_bps) / 100.0
+
+
 def metrics_from_trades(trades: list[Trade]) -> dict:
     returns = np.array([t.return_pct for t in trades], dtype=float)
     wins = returns[returns > 0]
@@ -29,15 +36,22 @@ def metrics_from_trades(trades: list[Trade]) -> dict:
         compounded_return = 0.0
         max_drawdown = 0.0
 
+    total_cost = float(sum(t.cost_pct for t in trades)) if trades else 0.0
+    gross_returns = [
+        float(t.gross_return_pct)
+        for t in trades
+        if t.gross_return_pct is not None
+    ]
+
     return {
         "trades": len(trades),
         "wins": int((returns > 0).sum()) if len(returns) else 0,
         "losses": int((returns < 0).sum()) if len(returns) else 0,
         "win_rate": float((returns > 0).mean() * 100) if len(returns) else None,
-        # Kept for backward compatibility: arithmetic sum of trade returns.
         "net_return_pct": float(returns.sum()) if len(returns) else 0.0,
-        # Portfolio-style return assuming 100% notional is rolled into each reversal.
         "compounded_return_pct": float(compounded_return),
+        "gross_return_sum_pct": float(sum(gross_returns)) if gross_returns else None,
+        "execution_cost_sum_pct": total_cost,
         "expectancy_pct": float(returns.mean()) if len(returns) else None,
         "profit_factor": (
             float(wins.sum() / abs(losses.sum()))
@@ -50,17 +64,24 @@ def metrics_from_trades(trades: list[Trade]) -> dict:
     }
 
 
-def reversal_backtest(signals: list[PivotSignal]) -> tuple[list[Trade], dict]:
+def reversal_backtest(
+    signals: list[PivotSignal],
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> tuple[list[Trade], dict]:
     trades: list[Trade] = []
     position_dir = 0
     entry = None
     entry_ts = None
+    cost_pct = round_trip_cost_pct(fee_bps=fee_bps, slippage_bps=slippage_bps)
 
     for sig in signals:
         new_dir = sig.direction
         px = sig.confirm_price
 
         if position_dir != 0 and new_dir != position_dir and entry is not None:
+            gross = trade_return_pct(position_dir, entry, px)
+            net = gross - cost_pct
             trades.append(
                 Trade(
                     direction=position_dir,
@@ -68,7 +89,9 @@ def reversal_backtest(signals: list[PivotSignal]) -> tuple[list[Trade], dict]:
                     entry=entry,
                     exit_ts=sig.ts,
                     exit=px,
-                    return_pct=trade_return_pct(position_dir, entry, px),
+                    return_pct=net,
+                    gross_return_pct=gross,
+                    cost_pct=cost_pct,
                 )
             )
 
