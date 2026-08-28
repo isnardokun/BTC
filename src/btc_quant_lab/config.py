@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,10 @@ class Settings(BaseSettings):
     bqr_binance_base_url: str = "https://api.binance.com"
     bqr_default_symbol: str = "BTCUSDT"
     bqr_default_interval: str = "1d"
+
+    # Execution-cost model. Zero keeps legacy comparisons unchanged.
+    bqr_fee_bps: float = 0.0
+    bqr_slippage_bps: float = 0.0
 
     minimax_api_key: str | None = None
     minimax_model: str = "MiniMax-M2.5"
