@@ -26,7 +26,7 @@ def local_podman_image_id(image: str) -> str | None:
     if not podman:
         return None
     try:
-        completed = subprocess.run(  # noqa: S603 -- fixed Podman argv, no shell
+        completed = subprocess.run(
             [podman, "image", "inspect", image, "--format", "{{.Id}}"],
             check=False,
             capture_output=True,
