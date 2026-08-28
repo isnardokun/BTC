@@ -23,7 +23,22 @@ def test_confirmed_structure_classifies_bull_and_bear_sequences():
 
 
 def _frame(future_multiplier: float) -> pl.DataFrame:
-    close = [100, 102, 101, 104, 103, 106, 104, 107, 105, 108, 106, 109, 107, 110]
+    close = [
+        100.0,
+        102.0,
+        101.0,
+        104.0,
+        103.0,
+        106.0,
+        104.0,
+        107.0,
+        105.0,
+        108.0,
+        106.0,
+        109.0,
+        107.0,
+        110.0,
+    ]
     open_ = [x - 0.5 for x in close]
     high = [x + 1.0 for x in close]
     low = [x - 1.0 for x in close]
