@@ -29,3 +29,5 @@ class Trade:
     exit_ts: int
     exit: float
     return_pct: float
+    gross_return_pct: float | None = None
+    cost_pct: float = 0.0
