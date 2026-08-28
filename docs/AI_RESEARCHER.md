@@ -1,6 +1,6 @@
 # Investigador IA
 
-La IA dispone programáticamente de histórico, señales, trades, métricas, configuraciones, walk-forward, regímenes y experimentos previos.
+La IA dispone programáticamente de histórico, señales, trades, métricas, configuraciones, walk-forward, regímenes, sensibilidad, Monte Carlo, benchmark y experimentos previos.
 
 ## Ciclo autónomo actual
 
@@ -8,17 +8,20 @@ La IA dispone programáticamente de histórico, señales, trades, métricas, con
 
 1. construir baseline;
 2. medirlo fuera de muestra;
-3. entregar a MiniMax el champion, ranking in-sample, OOS y regímenes;
-4. formular una hipótesis falsable;
-5. proponer parámetros, filtro causal o código;
-6. ejecutar automáticamente parámetros/filtros;
-7. comparar el `robustness_score` contra el champion;
-8. registrar `accepted_candidate`, `rejected` o `invalid_proposal`;
-9. repetir la siguiente iteración usando el nuevo champion si mejoró.
+3. calcular sensibilidad/meseta del espacio de parámetros;
+4. entregar a MiniMax champion, ranking, OOS, regímenes y robustez;
+5. formular una hipótesis falsable;
+6. proponer parámetros, filtro causal o política de código restringido;
+7. ejecutar automáticamente el candidato;
+8. medir full history + OOS + años + Buy & Hold + Monte Carlo;
+9. exigir mejora de `robustness_score`;
+10. enviar el candidato a un **agente crítico independiente**;
+11. promoverlo solamente si el crítico devuelve `approve`;
+12. registrar aceptación/rechazo y continuar.
 
 ## Parámetros
 
-Las propuestas de parámetros se restringen a la familia experimental vigente:
+La familia experimental base sigue siendo:
 
 - M1 / M3;
 - R4 / R7 / R8;
@@ -27,7 +30,7 @@ Las propuestas de parámetros se restringen a la familia experimental vigente:
 
 ## Filtros causales
 
-La IA también puede probar condiciones sobre features calculadas en la confirmación, entre ellas:
+La IA puede probar condiciones sobre features calculadas al confirmar el pivote, entre ellas:
 
 - ATR %;
 - volatilidad realizada;
@@ -37,11 +40,51 @@ La IA también puede probar condiciones sobre features calculadas en la confirma
 - régimen bull/bear/transition;
 - régimen de volatilidad.
 
-La variable `trade_return_pct` está explícitamente excluida de las features permitidas porque contiene información futura.
+`trade_return_pct` está excluido porque es un label futuro.
+
+## Sandbox de código ejecutable
+
+Los forks de código de esta fase implementan una política de aceptación de señales:
+
+```python
+def accept_signal(signal, features):
+    if signal["direction"] == -1:
+        return features["distance_ema50_pct"] > 5 and features["atr_pct"] > 2
+    return features["trend_regime"] != "bull"
+```
+
+El AST se valida antes de compilarse. Se prohíben:
+
+- imports;
+- llamadas a funciones;
+- acceso a atributos;
+- archivos;
+- red;
+- loops;
+- comprehensions;
+- dunder names.
+
+Se permiten únicamente operaciones deterministas sobre `signal` y `features` causales. El código se ejecuta con `__builtins__` vacío.
+
+Esto **no es todavía un sandbox para reemplazar arbitrariamente todo el detector**. Es un primer sandbox ejecutable para permitir que la IA escriba reglas nuevas sin darle capacidad de ejecutar código general del sistema.
+
+## Agente crítico
+
+`ai/critic.py` no propone estrategias. Revisa al candidato contra el champion usando:
+
+- resultados OOS;
+- tamaño de muestra;
+- drawdown;
+- consistencia anual;
+- Monte Carlo;
+- benchmark;
+- sensibilidad/meseta.
+
+Una mejora matemática sin aprobación del crítico no se promueve.
 
 ## Robustness score
 
-El score de investigación combina:
+Combina:
 
 - expectancy OOS;
 - profit factor OOS;
@@ -49,30 +92,16 @@ El score de investigación combina:
 - porcentaje de ventanas rentables;
 - penalización por drawdown.
 
-Su función es ordenar experimentos, no demostrar significancia estadística.
-
-## Forks de código
-
-`experiments/forks/<id>/` contiene el manifiesto, hipótesis y `strategy_variant.py` cuando MiniMax propone modificar código.
-
-Por seguridad, el código arbitrario generado por el modelo **todavía no se ejecuta automáticamente**. La evaluación queda `awaiting_sandbox`. El siguiente hito es un sandbox aislado con timeout, interfaz restringida y tests obligatorios.
+Es una heurística de ranking, no una prueba de significancia.
 
 ## Ejecución
-
-Una iteración:
-
-```bash
-bqrl ai-iterate --symbol BTCUSDT --interval 1d
-```
-
-Bucle autónomo de tres experimentos:
 
 ```bash
 bqrl ai-research --symbol BTCUSDT --interval 1d --iterations 3
 ```
 
-En la interfaz web existe el botón `IA autónoma ×3`.
+La interfaz web expone `IA autónoma ×3` y el panel `Robustez`.
 
 ## Objetivo
 
-Encontrar reglas simples y reproducibles que aumenten la capacidad de capturar movimientos sostenidos después de una señal, reduciendo ruido, reversión prematura y sobreajuste.
+Encontrar reglas simples y reproducibles que aumenten la captura de movimientos sostenidos después de una señal, reduciendo ruido, reversión prematura y sobreajuste.
