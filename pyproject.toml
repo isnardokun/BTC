@@ -23,6 +23,7 @@ dev = ["pytest>=8.4", "ruff>=0.12"]
 
 [project.scripts]
 bqrl = "btc_quant_lab.cli:app"
+bqrl-detector-research = "btc_quant_lab.ai.detector_research_cli:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -39,6 +40,7 @@ target-version = "py312"
 # These modules intentionally catch failures at AI-generated-code / external-model boundaries
 # and convert them into conservative rejections instead of crashing a research run.
 "src/btc_quant_lab/ai/research_loop.py" = ["BLE001"]
+"src/btc_quant_lab/ai/detector_research_loop.py" = ["BLE001"]
 "src/btc_quant_lab/ai/sandbox.py" = ["BLE001"]
 
 [tool.pytest.ini_options]
