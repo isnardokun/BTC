@@ -107,7 +107,6 @@ def apply_signal_policy(
     if not signals:
         return []
     policy = compile_signal_policy(source)
-    # No trades are passed here: future outcome labels never enter the policy context.
     rows = build_feature_rows(df, signals)
     feature_by_ts = {int(row["ts"]): dict(row) for row in rows}
     kept: list[PivotSignal] = []
@@ -140,6 +139,8 @@ def evaluate_sandbox_policy(
     warmup_bars: int,
     test_bars: int,
     step_bars: int | None = None,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> dict:
     """Evaluate a restricted code policy in chronological unseen windows."""
     validate_sandbox_source(source)
@@ -163,7 +164,11 @@ def evaluate_sandbox_policy(
         history = df.slice(0, test_end)
         signals = detect_pivots(history, cfg)
         signals = apply_signal_policy(history, signals, source)
-        trades, _ = reversal_backtest(signals)
+        trades, _ = reversal_backtest(
+            signals,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        )
         start_ts = int(timestamps[test_start])
         end_ts = int(timestamps[test_end - 1])
         oos = [
@@ -190,6 +195,8 @@ def evaluate_sandbox_policy(
             "warmup_bars": warmup_bars,
             "test_bars": test_bars,
             "step_bars": step_bars,
+            "fee_bps": fee_bps,
+            "slippage_bps": slippage_bps,
             "sandbox": "restricted_ast_signal_policy",
         },
         "windows": windows,
