@@ -12,22 +12,21 @@ Ese código **no se ejecuta directamente en el host**.
 bash scripts/setup_detector_sandbox_arch.sh
 ```
 
-El script instala Podman y descarga explícitamente una imagen Python confiable. Las ejecuciones generadas por IA posteriores usan:
-
-```text
---pull=never
---network=none
-```
-
-por lo que un fork no puede provocar descargas ni acceder a red durante su ejecución.
-
-La imagen por defecto es:
+El script instala Podman y descarga explícitamente la imagen confiable:
 
 ```text
 docker.io/library/python:3.12-slim
 ```
 
-Puede cambiarse explícitamente antes del setup mediante `BQR_DETECTOR_SANDBOX_IMAGE`.
+Después guarda localmente el **ID inmutable** resuelto por Podman en:
+
+```text
+.sandbox/detector_image_id.txt
+```
+
+Las ejecuciones generadas por IA usan `--pull=never` y `--network=none`. Además, antes de iniciar Deep Detector Research el preflight comprueba que el tag default todavía apunta exactamente al ID fijado. Si el tag cambió, el modo profundo se niega a ejecutar hasta repetir el setup.
+
+Las imágenes personalizadas están deliberadamente deshabilitadas en esta fase para impedir que distintas rutas internas del research loop terminen usando entornos diferentes. Se podrán reactivar cuando absolutamente todos los call sites reciban el ID explícito.
 
 ## Contrato del plugin
 
@@ -172,6 +171,7 @@ experiments/promotions/<promotion_id>.json
 Implementado:
 
 - sandbox rootless de proceso;
+- identidad de imagen fijada por ID local;
 - contrato de plugin `detect(candles, config)`;
 - validación de mercado;
 - auditoría prefix-invariance;
