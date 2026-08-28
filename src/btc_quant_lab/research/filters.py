@@ -26,6 +26,8 @@ ALLOWED_FEATURES = {
     "last_swing_low_type",
     "market_structure",
     "structure_break",
+    "signal_context",
+    "trend_contradiction_score",
     "bars_since_swing_high",
     "bars_since_swing_low",
     "distance_swing_high_pct",
