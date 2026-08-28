@@ -12,12 +12,13 @@
 
 ## H2 — Robustez
 - [x] walk-forward cronológico train/test
-- [ ] Monte Carlo/bootstrap
+- [x] Monte Carlo/bootstrap de secuencias de trades
 - [ ] costos/slippage
 - [x] resultados por régimen tendencial y volatilidad
-- [ ] resultados agregados por año
-- [ ] benchmark buy-and-hold
-- [ ] análisis de estabilidad/mesetas de parámetros
+- [x] resultados agregados por año
+- [x] benchmark buy-and-hold
+- [x] análisis de estabilidad/mesetas de parámetros
+- [x] equity compuesta y drawdown porcentual real
 
 ## H3 — Contexto
 - [x] ATR y ATR %
@@ -37,17 +38,27 @@
 - [x] contexto IA con ranking in-sample + walk-forward + regímenes
 - [x] bucle multi-iteración para parámetros y filtros
 - [x] aceptación/rechazo automático por score OOS
-- [ ] agente crítico independiente
-- [ ] sandbox ejecutable de forks de código
-- [ ] promoción asistida de variantes
+- [x] agente crítico independiente
+- [x] sandbox ejecutable restringido para forks de política de señales
+- [ ] sandbox de mutaciones completas del detector
+- [ ] promoción asistida de variantes a stable
 
 ## H5 — Calidad de ingeniería
 - [x] CI con pytest + ruff
+- [x] tests de fórmula SHORT, equity compuesta y sandbox
 - [ ] cobertura ampliada de API/IA
 - [ ] benchmarks de rendimiento
 - [ ] cache de optimizaciones costosas
 
-## H6 — Exportación
+## H6 — Próxima capa cuantitativa
+- [ ] costos, slippage y fees configurables
+- [ ] validación purged/embargo para experimentos con features
+- [ ] bootstrap por bloques/regímenes, no solo IID trades
+- [ ] estabilidad temporal del champion
+- [ ] comparación contra estrategias triviales long-only/EMA
+- [ ] promoción por múltiples semillas de Monte Carlo
+
+## H7 — Exportación
 - [ ] Pine Script
 - [ ] estrategia TradingView equivalente
 - [ ] alertas/webhooks
