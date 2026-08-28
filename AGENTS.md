@@ -24,6 +24,8 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - `trade_return_pct` es un label futuro y nunca puede ser una feature de entrada.
 - Un candidato autónomo debe mejorar OOS y ser aprobado por el agente crítico.
 - El sandbox actual solo admite políticas `accept_signal(signal, features)` con AST restringido; no convertirlo silenciosamente en ejecución Python arbitraria.
+- El `final_holdout` nunca se entrega al agente proponente ni al crítico durante las iteraciones.
+- Todos los candidatos de una misma investigación deben usar exactamente el mismo modelo de fees/slippage.
 
 ## Estado actual
 
@@ -41,7 +43,8 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - LONG = `(exit - entry) / entry * 100`;
 - SHORT = `(entry - exit) / entry * 100`;
 - `compounded_return_pct` modela reinversión secuencial;
-- `max_drawdown_pct` se calcula sobre equity compuesta.
+- `max_drawdown_pct` se calcula sobre equity compuesta;
+- `BQR_FEE_BPS` y `BQR_SLIPPAGE_BPS` se aplican por lado y el backtest descuenta el costo round-trip.
 
 ### Robustez
 - `research/walkforward.py`: train/test cronológico;
@@ -49,13 +52,14 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - `research/filters.py`: filtros declarativos;
 - `research/analytics.py`: resultados anuales y Buy & Hold;
 - `research/sensitivity.py`: meseta de parámetros;
-- `research/montecarlo.py`: bootstrap de secuencias de trades.
+- `research/montecarlo.py`: bootstrap de secuencias de trades;
+- `ai/research_loop.py`: development set + holdout final invisible.
 
 ### IA
 - `ai/agent.py`: investigador que propone;
 - `ai/sandbox.py`: ejecuta código restringido de política de señales;
 - `ai/critic.py`: crítico independiente;
-- `ai/research_loop.py`: propone → ejecuta → OOS → crítico → acepta/rechaza.
+- `ai/research_loop.py`: propone → ejecuta → OOS → crítico → acepta/rechaza → holdout final.
 
 ## Comandos de referencia
 
@@ -72,14 +76,14 @@ bqrl ai-research --symbol BTCUSDT --interval 1d --iterations 3
 
 ## Flujo
 ```text
-baseline → hipótesis → parámetros/filtro/código restringido → OOS → robustez → crítico → aceptar/rechazar
+baseline → hipótesis → parámetros/filtro/código restringido → OOS desarrollo → crítico → aceptar/rechazar → holdout final
 ```
 
 ## Próximas prioridades
-1. costos/slippage/fees configurables;
-2. purged/embargo validation para features;
-3. bootstrap por bloques y regímenes;
-4. estructura HH/HL/LH/LL explícita;
-5. estabilidad temporal del champion;
-6. sandbox de mutaciones completas del detector mediante proceso/contenedor aislado;
+1. purged/embargo validation para selección basada en features;
+2. bootstrap por bloques/regímenes;
+3. estructura HH/HL/LH/LL explícita;
+4. estabilidad temporal/champion decay;
+5. stress tests de fees/slippage;
+6. sandbox de proceso para mutaciones completas del detector;
 7. promoción asistida a una rama/tag `stable`.
