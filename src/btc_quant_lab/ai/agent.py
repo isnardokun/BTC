@@ -1,21 +1,54 @@
 import json
 import re
+
 from btc_quant_lab.ai.minimax import MiniMaxClient
-from btc_quant_lab.experiments import record_experiment, create_fork
+from btc_quant_lab.experiments import create_fork, record_experiment
 
 SYSTEM = """
 Eres el investigador cuantitativo autónomo de Bitcoin Quant Research Lab.
-Formula una hipótesis falsable. Evita lookahead, sobreajuste y muestras pequeñas.
+Tu misión es mejorar la captura de movimientos sostenidos de Bitcoin sin lookahead y sin sobreajuste.
+
+Dispones de:
+- ranking in-sample;
+- walk-forward fuera de muestra;
+- frecuencia con la que cada configuración es seleccionada;
+- resultados por régimen tendencial y de volatilidad;
+- experimentos anteriores.
+
+Prioridades:
+1. La robustez out-of-sample pesa más que el retorno in-sample.
+2. Busca mesetas/regiones estables de parámetros, no máximos aislados.
+3. Una hipótesis debe explicar un patrón observado en fallos o éxitos.
+4. No uses trade_return_pct ni ninguna variable futura como feature de entrada.
+5. Prefiere una regla simple e interpretable antes que complejidad arbitraria.
+6. Si propones código, debe ser un fork experimental; nunca modifiques la estable.
+
 Devuelve JSON estricto:
 {
-  "hypothesis": "...",
-  "reasoning_summary": "...",
-  "proposal_type": "parameters" | "code",
-  "parameters": {"motor":"M1|M3","range_mode":"R4|R7|R8","min_bars":2,"max_pending":3},
-  "code_proposal": null,
-  "success_criteria": ["..."]
+  "hypothesis": "hipótesis falsable",
+  "observed_evidence": ["hecho concreto observado en los resultados"],
+  "reasoning_summary": "resumen breve",
+  "proposal_type": "parameters" | "filter" | "code",
+  "parameters": {
+    "motor": "M1|M3",
+    "range_mode": "R4|R7|R8",
+    "min_bars": 2,
+    "max_pending": 3
+  },
+  "filter_proposal": null | {
+    "feature": "nombre de feature existente",
+    "operator": ">|>=|<|<=|==|!=",
+    "value": "valor numérico o categórico",
+    "applies_to": "all|long|short"
+  },
+  "code_proposal": null | "variante Python experimental completa",
+  "success_criteria": [
+    "criterio cuantitativo in-sample",
+    "criterio cuantitativo walk-forward",
+    "criterio de estabilidad"
+  ],
+  "rejection_condition": "condición explícita para descartar la hipótesis"
 }
-Si propones código, code_proposal debe ser una variante experimental completa y autocontenida; nunca modifiques la estable.
 """
 
 
@@ -23,16 +56,34 @@ def _extract_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", text, re.S)
-        if not m:
+        match = re.search(r"\{.*\}", text, re.S)
+        if not match:
             raise
-        return json.loads(m.group(0))
+        return json.loads(match.group(0))
 
 
 async def propose_iteration(context: dict) -> dict:
-    response = await MiniMaxClient().complete(SYSTEM, "Propón exactamente un siguiente experimento:\n" + json.dumps(context, ensure_ascii=False, indent=2))
+    response = await MiniMaxClient().complete(
+        SYSTEM,
+        "Analiza el estado del laboratorio y propone exactamente un siguiente experimento. "
+        "No repitas una hipótesis ya probada.\n"
+        + json.dumps(context, ensure_ascii=False, indent=2),
+    )
     proposal = _extract_json(response)
-    exp = record_experiment({"kind": "ai_proposal", "hypothesis": proposal.get("hypothesis"), "proposal": proposal, "status": "proposed"})
+    experiment = record_experiment(
+        {
+            "kind": "ai_proposal",
+            "hypothesis": proposal.get("hypothesis"),
+            "proposal": proposal,
+            "status": "proposed",
+        }
+    )
+
     if proposal.get("proposal_type") == "code" and proposal.get("code_proposal"):
-        create_fork(exp, proposal["hypothesis"], proposal["code_proposal"])
-    return exp
+        create_fork(
+            experiment,
+            proposal.get("hypothesis", "Sin hipótesis"),
+            proposal["code_proposal"],
+        )
+
+    return experiment
