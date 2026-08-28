@@ -27,6 +27,7 @@
 - [x] tamaño de cuerpo/rango normalizado por ATR
 - [x] régimen bull/bear/transition
 - [x] régimen de volatilidad
+- [x] filtros causales experimentales sobre features
 - [ ] estructura HH-HL-LH-LL explícita
 - [ ] drawdown desde máximos
 - [ ] features temporales/cíclicas
@@ -34,12 +35,19 @@
 
 ## H4 — Agente autónomo
 - [x] contexto IA con ranking in-sample + walk-forward + regímenes
-- [ ] bucle multi-iteración que ejecute y evalúe propuestas automáticamente
+- [x] bucle multi-iteración para parámetros y filtros
+- [x] aceptación/rechazo automático por score OOS
 - [ ] agente crítico independiente
 - [ ] sandbox ejecutable de forks de código
 - [ ] promoción asistida de variantes
 
-## H5 — Exportación
+## H5 — Calidad de ingeniería
+- [x] CI con pytest + ruff
+- [ ] cobertura ampliada de API/IA
+- [ ] benchmarks de rendimiento
+- [ ] cache de optimizaciones costosas
+
+## H6 — Exportación
 - [ ] Pine Script
 - [ ] estrategia TradingView equivalente
 - [ ] alertas/webhooks
