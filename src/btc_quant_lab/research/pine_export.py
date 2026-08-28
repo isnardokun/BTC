@@ -153,3 +153,57 @@ plotshape(confirmedBull, title="Pivote alcista confirmado", style=shape.triangle
 alertcondition(confirmedBear, "BQR bearish pivot", "BQR bearish pivot confirmed")
 alertcondition(confirmedBull, "BQR bullish pivot", "BQR bullish pivot confirmed")
 '''
+
+
+def export_baseline_strategy_pine(
+    cfg: PivotConfig,
+    title: str = "BQR Pivot Reversal Strategy",
+) -> str:
+    """Export a TradingView strategy for visual verification of reversal semantics.
+
+    Orders are submitted only when a confirmed pivot changes direction and
+    `process_orders_on_close=true` is used to align entries with the confirmation close.
+    This exporter intentionally leaves TradingView commission/slippage at zero: the
+    Python engine remains authoritative for the configurable bps execution-cost model.
+    """
+    source = export_baseline_pine(cfg, title=title)
+    lines = source.splitlines()
+    if len(lines) < 2 or not lines[1].startswith("indicator("):
+        raise ValueError("unexpected generated indicator header")
+
+    safe_title = title.replace('"', "'")
+    lines[1] = (
+        f'strategy("{safe_title} — {cfg.motor}/{cfg.range_mode}/min{cfg.min_bars}/'
+        f'pend{cfg.max_pending}", overlay=true, pyramiding=0, '
+        "process_orders_on_close=true, calc_on_every_tick=false, "
+        "commission_type=strategy.commission.percent, commission_value=0, "
+        "slippage=0, max_boxes_count=500, max_labels_count=500)"
+    )
+    source = "\n".join(lines) + "\n"
+
+    marker = "// 2) Detect a new transition using only the prior run and the current candle."
+    strategy_logic = '''// Strategy verification layer: opposite confirmation closes/reverses.
+// Gross % labels use the same close-to-close formulas as the zero-cost Python benchmark.
+var int bqrPositionDir = 0
+var float bqrEntryPrice = na
+
+if confirmedBear and bqrPositionDir != -1
+    if bqrPositionDir == 1 and not na(bqrEntryPrice)
+        float closedReturn = (close - bqrEntryPrice) / bqrEntryPrice * 100.0
+        label.new(bar_index, high, str.tostring(closedReturn, "#.##") + "%", style=label.style_label_down, textcolor=color.white, color=closedReturn >= 0 ? color.new(color.green, 15) : color.new(color.red, 15))
+    strategy.entry("BQR Short", strategy.short)
+    bqrPositionDir := -1
+    bqrEntryPrice := close
+
+if confirmedBull and bqrPositionDir != 1
+    if bqrPositionDir == -1 and not na(bqrEntryPrice)
+        float closedReturn = (bqrEntryPrice - close) / bqrEntryPrice * 100.0
+        label.new(bar_index, low, str.tostring(closedReturn, "#.##") + "%", style=label.style_label_up, textcolor=color.white, color=closedReturn >= 0 ? color.new(color.green, 15) : color.new(color.red, 15))
+    strategy.entry("BQR Long", strategy.long)
+    bqrPositionDir := 1
+    bqrEntryPrice := close
+
+'''
+    if marker not in source:
+        raise ValueError("strategy insertion marker not found")
+    return source.replace(marker, strategy_logic + marker, 1)
