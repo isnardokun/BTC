@@ -24,6 +24,7 @@ dev = ["pytest>=8.4", "ruff>=0.12"]
 [project.scripts]
 bqrl = "btc_quant_lab.cli:app"
 bqrl-detector-research = "btc_quant_lab.ai.detector_research_cli:app"
+bqrl-pine-export = "btc_quant_lab.research.pine_cli:app"
 
 [build-system]
 requires = ["hatchling"]
