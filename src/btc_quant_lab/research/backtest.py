@@ -6,9 +6,10 @@ from btc_quant_lab.models import PivotSignal, Trade
 
 
 def trade_return_pct(direction: int, entry: float, exit_price: float) -> float:
+    """Signed price return captured by a position, measured from entry price."""
     if direction == 1:
-        return (exit_price / entry - 1.0) * 100.0
-    return (entry / exit_price - 1.0) * 100.0
+        return (exit_price - entry) / entry * 100.0
+    return (entry - exit_price) / entry * 100.0
 
 
 def metrics_from_trades(trades: list[Trade]) -> dict:
