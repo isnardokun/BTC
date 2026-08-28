@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from pathlib import Path
 import json
 import uuid
-
+from datetime import UTC, datetime
+from pathlib import Path
 
 PROMOTIONS = Path("experiments/promotions")
 
