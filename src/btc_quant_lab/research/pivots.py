@@ -1,8 +1,14 @@
 import polars as pl
+
 from btc_quant_lab.models import PivotConfig, PivotSignal
 
 
-def _prior_same_color(opens: list[float], closes: list[float], i: int, bullish: bool) -> int:
+def _prior_same_color(
+    opens: list[float],
+    closes: list[float],
+    i: int,
+    bullish: bool,
+) -> int:
     n = 0
     j = i - 1
     while j >= 0:
@@ -14,11 +20,20 @@ def _prior_same_color(opens: list[float], closes: list[float], i: int, bullish: 
     return n
 
 
-def _bounds(cfg: PivotConfig, bear: bool, i: int, o, h, l, c) -> tuple[float, float]:
+def _bounds(
+    cfg: PivotConfig,
+    bear: bool,
+    i: int,
+    o,
+    h,
+    l,
+    c,
+) -> tuple[float, float]:
     prev_body_top = max(o[i - 1], c[i - 1])
     prev_body_bottom = min(o[i - 1], c[i - 1])
     curr_body_top = max(o[i], c[i])
     curr_body_bottom = min(o[i], c[i])
+
     if cfg.range_mode == "R4":
         return curr_body_top, curr_body_bottom
     if cfg.range_mode == "R7":
@@ -31,21 +46,42 @@ def _bounds(cfg: PivotConfig, bear: bool, i: int, o, h, l, c) -> tuple[float, fl
 def detect_pivots(df: pl.DataFrame, cfg: PivotConfig) -> list[PivotSignal]:
     if len(df) < 3:
         return []
-    ts = df["ts"].to_list(); o = df["open"].to_list(); h = df["high"].to_list(); l = df["low"].to_list(); c = df["close"].to_list()
+
+    ts = df["ts"].to_list()
+    o = df["open"].to_list()
+    h = df["high"].to_list()
+    l = df["low"].to_list()
+    c = df["close"].to_list()
     pending: dict | None = None
     signals: list[PivotSignal] = []
 
     for i in range(1, len(df)):
         if pending is not None:
             age = i - pending["i"]
-            confirmed = c[i] < pending["bottom"] if pending["dir"] == -1 else c[i] > pending["top"]
-            invalid = c[i] > pending["top"] if pending["dir"] == -1 else c[i] < pending["bottom"]
+            confirmed = (
+                c[i] < pending["bottom"]
+                if pending["dir"] == -1
+                else c[i] > pending["top"]
+            )
+            invalid = (
+                c[i] > pending["top"]
+                if pending["dir"] == -1
+                else c[i] < pending["bottom"]
+            )
             timed_out = cfg.max_pending > 0 and age >= cfg.max_pending
+
             if confirmed:
-                signals.append(PivotSignal(
-                    ts=ts[i], direction=pending["dir"], top=pending["top"], bottom=pending["bottom"],
-                    candidate_ts=ts[pending["i"]], confirm_price=c[i], bars_to_confirm=age,
-                ))
+                signals.append(
+                    PivotSignal(
+                        ts=ts[i],
+                        direction=pending["dir"],
+                        top=pending["top"],
+                        bottom=pending["bottom"],
+                        candidate_ts=ts[pending["i"]],
+                        confirm_price=c[i],
+                        bars_to_confirm=age,
+                    )
+                )
                 pending = None
             elif invalid or timed_out:
                 pending = None
@@ -63,10 +99,9 @@ def detect_pivots(df: pl.DataFrame, cfg: PivotConfig) -> list[PivotSignal]:
             top, bottom = _bounds(cfg, False, i, o, h, l, c)
             candidate = {"dir": 1, "top": top, "bottom": bottom, "i": i}
 
-        if candidate:
-            if cfg.motor == "M3":
-                pending = candidate
-            elif cfg.motor == "M1" and pending is None:
-                pending = candidate
+        if candidate and (
+            cfg.motor == "M3" or (cfg.motor == "M1" and pending is None)
+        ):
+            pending = candidate
 
     return signals
