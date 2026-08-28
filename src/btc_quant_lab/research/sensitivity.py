@@ -31,8 +31,15 @@ def parameter_sensitivity(
     min_trades: int = 20,
     neighborhood_radius: int = 1,
     plateau_ratio: float = 0.80,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> dict:
-    rows = optimize(df, min_trades=min_trades)
+    rows = optimize(
+        df,
+        min_trades=min_trades,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
     finite = [r for r in rows if r["score"] != float("-inf")]
     if not finite:
         return {"best": None, "neighbors": [], "plateau": None}
@@ -61,7 +68,6 @@ def parameter_sensitivity(
         threshold = best_score * plateau_ratio
         near_best = [r for r in neighbors if float(r["score"]) >= threshold]
     else:
-        # If the best score is non-positive, do not call the area a healthy plateau.
         near_best = []
 
     positive_quality = [
@@ -74,6 +80,7 @@ def parameter_sensitivity(
     return {
         "best": best,
         "neighbors": neighbors,
+        "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
         "plateau": {
             "radius": neighborhood_radius,
             "neighbor_count": len(neighbors),
