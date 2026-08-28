@@ -1,12 +1,16 @@
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from btc_quant_lab.ai.process_sandbox import (
     DetectorSandboxError,
+    assert_prefix_causal,
     build_podman_command,
     validate_detector_result,
+    validate_signals_against_market,
 )
+from btc_quant_lab.models import PivotSignal
 
 
 def test_podman_command_disables_network_and_limits_host_access(tmp_path: Path):
@@ -82,3 +86,97 @@ def test_detector_result_validation_rejects_future_candidate_timestamp():
                 ]
             }
         )
+
+
+def _market() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "ts": [10, 20, 30, 40],
+            "open": [99.0, 100.0, 101.0, 102.0],
+            "high": [101.0, 102.0, 103.0, 104.0],
+            "low": [98.0, 99.0, 100.0, 101.0],
+            "close": [100.0, 101.0, 102.0, 103.0],
+            "volume": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+
+
+def test_market_validation_requires_real_confirmation_close():
+    signal = PivotSignal(
+        ts=30,
+        direction=1,
+        top=103.0,
+        bottom=100.0,
+        candidate_ts=20,
+        confirm_price=999.0,
+        bars_to_confirm=1,
+    )
+    with pytest.raises(DetectorSandboxError, match="confirm_price"):
+        validate_signals_against_market(_market(), [signal])
+
+
+def test_market_validation_checks_bars_to_confirm():
+    signal = PivotSignal(
+        ts=40,
+        direction=-1,
+        top=104.0,
+        bottom=101.0,
+        candidate_ts=20,
+        confirm_price=103.0,
+        bars_to_confirm=1,
+    )
+    with pytest.raises(DetectorSandboxError, match="bars_to_confirm"):
+        validate_signals_against_market(_market(), [signal])
+
+
+def test_prefix_causality_rejects_rewritten_past_signal():
+    earlier = [
+        PivotSignal(
+            ts=20,
+            direction=1,
+            top=102.0,
+            bottom=99.0,
+            candidate_ts=10,
+            confirm_price=101.0,
+            bars_to_confirm=1,
+        )
+    ]
+    later = [
+        PivotSignal(
+            ts=20,
+            direction=-1,
+            top=102.0,
+            bottom=99.0,
+            candidate_ts=10,
+            confirm_price=101.0,
+            bars_to_confirm=1,
+        )
+    ]
+    with pytest.raises(DetectorSandboxError, match="causality audit failed"):
+        assert_prefix_causal(earlier, later, earlier_end_ts=20)
+
+
+def test_prefix_causality_allows_new_future_signals():
+    earlier = [
+        PivotSignal(
+            ts=20,
+            direction=1,
+            top=102.0,
+            bottom=99.0,
+            candidate_ts=10,
+            confirm_price=101.0,
+            bars_to_confirm=1,
+        )
+    ]
+    later = earlier + [
+        PivotSignal(
+            ts=40,
+            direction=-1,
+            top=104.0,
+            bottom=101.0,
+            candidate_ts=30,
+            confirm_price=103.0,
+            bars_to_confirm=1,
+        )
+    ]
+    assert_prefix_causal(earlier, later, earlier_end_ts=20)
