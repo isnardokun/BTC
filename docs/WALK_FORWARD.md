@@ -1,10 +1,12 @@
-# Walk-forward y features causales
+# Walk-forward, Purged+Embargo y features causales
 
 ## Objetivo
 
-Evitar que el laboratorio elija una configuración porque funciona bien sobre el mismo histórico que se utilizó para ajustarla.
+Evitar que el laboratorio elija una configuración porque funciona bien sobre el mismo histórico que se utilizó para ajustarla, y reducir además la dependencia artificial entre observaciones pegadas al límite train/test.
 
-## Procedimiento por defecto en gráfico diario
+## Walk-forward estándar
+
+Configuración por defecto en gráfico diario:
 
 - entrenamiento: 1095 barras (~3 años);
 - prueba: 365 barras (~1 año);
@@ -20,10 +22,33 @@ En cada ciclo:
 5. solo se contabilizan operaciones cuya entrada y salida ocurren dentro de `test`;
 6. se avanza al siguiente período.
 
-La tabla final muestra:
+## Purged + Embargo
+
+`purged_walk_forward()` añade dos separaciones adicionales:
+
+- `purge_bars`: elimina las últimas barras del train antes de seleccionar parámetros;
+- `embargo_bars`: deja un hueco completamente fuera de train y test antes de iniciar la evaluación OOS.
+
+Esquema:
+
+```text
+TRAIN USADO | PURGE | EMBARGO | TEST OOS
+```
+
+El objetivo es comprobar si una aparente ventaja depende demasiado de la proximidad temporal de los datos alrededor de la frontera. No sustituye el holdout final invisible del research loop.
+
+Comando:
+
+```bash
+bqrl purged-walk-forward --symbol BTCUSDT --interval 1d --purge-bars 5 --embargo-bars 5
+```
+
+## Métricas
+
+Ambos métodos reportan:
 
 - trades OOS;
-- retorno neto OOS;
+- retorno compuesto OOS;
 - expectancy OOS;
 - profit factor OOS;
 - max drawdown OOS;
@@ -34,7 +59,7 @@ Una configuración interesante debería aparecer repetidamente o pertenecer a un
 
 ## Features causales
 
-`research/features.py` calcula las features en el momento exacto de confirmación del pivote. Ninguna requiere velas futuras.
+`research/features.py` calcula las features en el momento exacto de confirmación del pivote. Ninguna requiere velas posteriores al instante en que la feature queda disponible.
 
 Incluye:
 
@@ -47,8 +72,39 @@ Incluye:
 - distancia a EMA20, EMA50 y EMA200;
 - separación EMA20 vs EMA50;
 - cantidad de velas consecutivas previas;
-- régimen `bull`, `bear`, `transition`;
+- régimen EMA `bull`, `bear`, `transition`;
 - régimen de volatilidad `normal/high`.
+
+### Estructura HH/HL/LH/LL
+
+La estructura no usa swings retrospectivos perfectos. Usa fractales confirmados con retraso causal. Un swing situado en `k` se incorpora al estado únicamente después de cerrar las barras derechas necesarias para confirmarlo.
+
+Features:
+
+- `last_swing_high_type`: H, HH, LH, EH;
+- `last_swing_low_type`: L, HL, LL, EL;
+- `market_structure`: bull, bear, transition, unknown;
+- `structure_break`: bullish_bos, bearish_bos, none;
+- `bars_since_swing_high`;
+- `bars_since_swing_low`;
+- distancia al swing alto/bajo en porcentaje;
+- distancia al swing alto/bajo en ATR.
+
+Interpretación base:
+
+```text
+HH + HL → estructura bull
+LH + LL → estructura bear
+otras combinaciones → transition
+```
+
+Estas variables permiten probar hipótesis como:
+
+> Ignorar un pivote bajista mientras HH+HL sigue intacto, salvo que ya exista bearish BOS.
+
+La hipótesis debe validarse OOS; no se incorpora por intuición visual.
+
+## Label futuro
 
 `trade_return_pct` puede acompañar cada fila únicamente como **label de investigación**. Está prohibido utilizarlo como variable de entrada o condición de señal.
 
@@ -56,18 +112,8 @@ Incluye:
 
 ```bash
 bqrl walk-forward --symbol BTCUSDT --interval 1d
-```
-
-```bash
+bqrl purged-walk-forward --symbol BTCUSDT --interval 1d
 bqrl features --symbol BTCUSDT --interval 1d --motor M1 --range-mode R8 --min-bars 3 --max-pending 3
 ```
 
-Desde la UI web existen los botones `Walk-forward` e `IA: experimento`.
-
-## Siguiente nivel
-
-El paso posterior es convertir las features en hipótesis medibles, por ejemplo:
-
-> Los pivotes bajistas R8 confirmados durante régimen bull tienen peor expectancy cuando la distancia a EMA50 es pequeña.
-
-La IA puede proponer esa regla, pero deberá probarse en ventanas fuera de muestra antes de incorporarla al detector estable.
+Desde la UI web existen controles separados para `Walk-forward` y `Purged + Embargo`, y el panel de contexto muestra rendimiento por estructura de mercado y BOS.
