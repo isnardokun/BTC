@@ -22,6 +22,16 @@ ALLOWED_FEATURES = {
     "ema20_vs_ema50_pct",
     "trend_regime",
     "volatility_regime",
+    "last_swing_high_type",
+    "last_swing_low_type",
+    "market_structure",
+    "structure_break",
+    "bars_since_swing_high",
+    "bars_since_swing_low",
+    "distance_swing_high_pct",
+    "distance_swing_low_pct",
+    "distance_swing_high_atr",
+    "distance_swing_low_atr",
 }
 
 OPS = {
