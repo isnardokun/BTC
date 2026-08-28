@@ -9,9 +9,10 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 3. `docs/RESEARCH.md`
 4. `docs/WALK_FORWARD.md`
 5. `docs/AI_RESEARCHER.md`
-6. `docs/ROADMAP.md`
-7. `experiments/ledger.jsonl`
-8. tests
+6. `docs/PROMOTION.md`
+7. `docs/ROADMAP.md`
+8. `experiments/ledger.jsonl`
+9. tests
 
 ## Reglas
 - No usar lookahead ni datos futuros.
@@ -23,11 +24,12 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - Preferir regiones estables de parámetros a un único máximo in-sample.
 - `trade_return_pct` es un label futuro y nunca puede ser una feature de entrada.
 - Un candidato autónomo debe mejorar OOS y ser aprobado por el agente crítico.
-- El sandbox actual solo admite políticas `accept_signal(signal, features)` con AST restringido; no convertirlo silenciosamente en ejecución Python arbitraria.
+- El sandbox AST actual solo admite políticas `accept_signal(signal, features)`; no convertirlo silenciosamente en ejecución Python arbitraria.
 - El `final_holdout` nunca se entrega al agente proponente ni al crítico durante las iteraciones.
 - Todos los candidatos de una misma investigación deben usar exactamente el mismo modelo de fees/slippage.
 - La estructura HH/HL/LH/LL debe usar swings confirmados con retraso causal; nunca pivotes perfectos retrospectivos.
 - La referencia Purged+Embargo es evidencia adicional de fragilidad de frontera, no sustituto del holdout final.
+- `eligible_for_review` no equivale a `stable`.
 
 ## Estado actual
 
@@ -50,28 +52,37 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 
 ### Robustez
 - `research/walkforward.py`: train/test cronológico + `purged_walk_forward`;
-- `research/features.py`: features causales, regímenes y estructura HH/HL/LH/LL;
-- `research/filters.py`: filtros declarativos incluyendo estructura/BOS;
+- `research/features.py`: features causales, HH/HL/LH/LL, BOS y score de contradicción;
+- `research/filters.py`: filtros declarativos incluyendo estructura/contexto;
+- `research/regime_validation.py`: métricas + block bootstrap por régimen/contexto;
 - `research/analytics.py`: resultados anuales y Buy & Hold;
 - `research/sensitivity.py`: meseta de parámetros;
 - `research/montecarlo.py`: bootstrap IID y por bloques;
 - `research/cost_stress.py`: degradación por fees/slippage;
 - `research/stability.py`: estabilidad temporal/champion decay;
-- `ai/research_loop.py`: development set + referencia purged/embargo + holdout final invisible.
+- `research/promotion.py`: gates y manifest reproducible de promoción;
+- `ai/research_loop.py`: development + OOS + referencia purged/embargo + crítico + holdout final + promotion manifest.
 
 ### Features estructurales
 - `last_swing_high_type`: H/HH/LH/EH;
 - `last_swing_low_type`: L/HL/LL/EL;
 - `market_structure`: bull/bear/transition/unknown;
 - `structure_break`: bullish_bos/bearish_bos/none;
+- `signal_context`: aligned/mixed/contrarian/unknown;
+- `trend_contradiction_score`: 0..3;
 - barras desde último swing alto/bajo;
 - distancia al último swing en % y ATR.
 
 ### IA
 - `ai/agent.py`: investigador que propone;
 - `ai/sandbox.py`: ejecuta código restringido de política de señales;
-- `ai/critic.py`: crítico independiente que revisa OOS, estructura y purged/embargo;
-- `ai/research_loop.py`: propone → ejecuta → OOS → crítico → acepta/rechaza → holdout final.
+- `ai/critic.py`: crítico independiente que revisa OOS, estructura, régimen y purged/embargo;
+- `ai/research_loop.py`: propone → ejecuta → OOS → crítico → acepta/rechaza → holdout final → promotion manifest.
+
+### Promoción
+- `experiments/promotions/<id>.json` se genera al final del research loop;
+- estados: `eligible_for_review` o `rejected_for_promotion`;
+- nunca se crea/mueve `stable` automáticamente.
 
 ## Comandos de referencia
 
@@ -93,16 +104,19 @@ baseline
   → hipótesis
   → parámetros/filtro/código restringido
   → OOS desarrollo
+  → regímenes + block bootstrap
   → referencia purged/embargo
   → crítico
   → aceptar/rechazar
   → holdout final invisible
+  → promotion manifest
+  → revisión explícita
+  → stable (futuro)
 ```
 
 ## Próximas prioridades
-1. bootstrap y resultados estratificados por régimen/estructura;
-2. scoring explícito de contradicción tendencial de una señal;
-3. promoción asistida de champion con manifest reproducible;
-4. sandbox de proceso para mutaciones completas del detector;
-5. exportador de una variante aprobada a Pine Script;
-6. rama/tag `stable` solo después de pasar holdout y stress tests.
+1. sandbox de proceso rootless para mutaciones completas del detector;
+2. contrato de plugin para que un fork implemente un detector alternativo sin acceso al host;
+3. validación automática del detector mutado contra baseline, OOS, Purged+Embargo y holdout;
+4. exportador de una variante aprobada a Pine Script;
+5. acción explícita para crear rama/tag `stable` a partir de un manifest aprobado.
