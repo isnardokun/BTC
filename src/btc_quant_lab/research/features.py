@@ -69,6 +69,113 @@ def _safe_pct(num: float, den: float) -> float | None:
     return float(num / den * 100.0)
 
 
+def _confirmed_fractal_high(high: np.ndarray, k: int, left: int, right: int) -> bool:
+    value = high[k]
+    left_values = high[k - left : k]
+    right_values = high[k + 1 : k + right + 1]
+    return value > float(np.max(left_values)) and value >= float(np.max(right_values))
+
+
+def _confirmed_fractal_low(low: np.ndarray, k: int, left: int, right: int) -> bool:
+    value = low[k]
+    left_values = low[k - left : k]
+    right_values = low[k + 1 : k + right + 1]
+    return value < float(np.min(left_values)) and value <= float(np.min(right_values))
+
+
+def _causal_market_structure(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    left: int = 2,
+    right: int = 2,
+) -> dict[str, list]:
+    """Build confirmed swing structure without exposing future candles.
+
+    A swing at candle k becomes observable only on candle k + right. Therefore every
+    value emitted at index i uses candles no later than i.
+    """
+    n = len(close)
+    high_type: list[str | None] = [None] * n
+    low_type: list[str | None] = [None] * n
+    structure: list[str] = ["unknown"] * n
+    structure_break: list[str] = ["none"] * n
+    last_high: list[float | None] = [None] * n
+    last_low: list[float | None] = [None] * n
+    bars_since_high: list[int | None] = [None] * n
+    bars_since_low: list[int | None] = [None] * n
+
+    previous_swing_high: float | None = None
+    previous_swing_low: float | None = None
+    current_high: float | None = None
+    current_low: float | None = None
+    current_high_type: str | None = None
+    current_low_type: str | None = None
+    current_high_index: int | None = None
+    current_low_index: int | None = None
+
+    for i in range(n):
+        k = i - right
+        if k >= left and k + right < n:
+            if _confirmed_fractal_high(high, k, left, right):
+                value = float(high[k])
+                if previous_swing_high is None:
+                    current_high_type = "H"
+                elif value > previous_swing_high:
+                    current_high_type = "HH"
+                elif value < previous_swing_high:
+                    current_high_type = "LH"
+                else:
+                    current_high_type = "EH"
+                previous_swing_high = value
+                current_high = value
+                current_high_index = k
+
+            if _confirmed_fractal_low(low, k, left, right):
+                value = float(low[k])
+                if previous_swing_low is None:
+                    current_low_type = "L"
+                elif value > previous_swing_low:
+                    current_low_type = "HL"
+                elif value < previous_swing_low:
+                    current_low_type = "LL"
+                else:
+                    current_low_type = "EL"
+                previous_swing_low = value
+                current_low = value
+                current_low_index = k
+
+        high_type[i] = current_high_type
+        low_type[i] = current_low_type
+        last_high[i] = current_high
+        last_low[i] = current_low
+        bars_since_high[i] = None if current_high_index is None else i - current_high_index
+        bars_since_low[i] = None if current_low_index is None else i - current_low_index
+
+        if current_high_type == "HH" and current_low_type == "HL":
+            structure[i] = "bull"
+        elif current_high_type == "LH" and current_low_type == "LL":
+            structure[i] = "bear"
+        elif current_high_type is not None and current_low_type is not None:
+            structure[i] = "transition"
+
+        if current_high is not None and close[i] > current_high:
+            structure_break[i] = "bullish_bos"
+        elif current_low is not None and close[i] < current_low:
+            structure_break[i] = "bearish_bos"
+
+    return {
+        "last_swing_high_type": high_type,
+        "last_swing_low_type": low_type,
+        "market_structure": structure,
+        "structure_break": structure_break,
+        "last_swing_high": last_high,
+        "last_swing_low": last_low,
+        "bars_since_swing_high": bars_since_high,
+        "bars_since_swing_low": bars_since_low,
+    }
+
+
 def build_feature_rows(
     df: pl.DataFrame,
     signals: list[PivotSignal],
@@ -102,6 +209,7 @@ def build_feature_rows(
     vol_mean20 = _rolling_mean(volume, 20)
     vol_std20 = _rolling_std(volume, 20)
     atr_mean100 = _rolling_mean(atr_pct, 100)
+    market = _causal_market_structure(high, low, close)
 
     trade_by_entry = {t.entry_ts: t.return_pct for t in (trades or [])}
     index_by_ts = {int(v): i for i, v in enumerate(ts)}
@@ -131,6 +239,8 @@ def build_feature_rows(
         body = abs(close[i] - open_[i])
         candle_range = high[i] - low[i]
         signal_range = sig.top - sig.bottom
+        swing_high = market["last_swing_high"][i]
+        swing_low = market["last_swing_low"][i]
 
         rows.append(
             {
@@ -152,6 +262,28 @@ def build_feature_rows(
                 "ema20_vs_ema50_pct": _safe_pct(ema20[i] - ema50[i], ema50[i]),
                 "trend_regime": trend_regime,
                 "volatility_regime": volatility_regime,
+                "last_swing_high_type": market["last_swing_high_type"][i],
+                "last_swing_low_type": market["last_swing_low_type"][i],
+                "market_structure": market["market_structure"][i],
+                "structure_break": market["structure_break"][i],
+                "bars_since_swing_high": market["bars_since_swing_high"][i],
+                "bars_since_swing_low": market["bars_since_swing_low"][i],
+                "distance_swing_high_pct": (
+                    None if swing_high is None else _safe_pct(close[i] - swing_high, swing_high)
+                ),
+                "distance_swing_low_pct": (
+                    None if swing_low is None else _safe_pct(close[i] - swing_low, swing_low)
+                ),
+                "distance_swing_high_atr": (
+                    None
+                    if swing_high is None or atr14[i] <= 0
+                    else float((close[i] - swing_high) / atr14[i])
+                ),
+                "distance_swing_low_atr": (
+                    None
+                    if swing_low is None or atr14[i] <= 0
+                    else float((close[i] - swing_low) / atr14[i])
+                ),
                 "trade_return_pct": trade_by_entry.get(int(sig.ts)),
             }
         )
@@ -162,7 +294,13 @@ def build_feature_rows(
 def summarize_feature_outcomes(rows: list[dict]) -> dict:
     labeled = [r for r in rows if r.get("trade_return_pct") is not None]
     if not labeled:
-        return {"labeled_signals": 0, "by_trend_regime": {}, "by_volatility_regime": {}}
+        return {
+            "labeled_signals": 0,
+            "by_trend_regime": {},
+            "by_volatility_regime": {},
+            "by_market_structure": {},
+            "by_structure_break": {},
+        }
 
     def group(key: str) -> dict:
         result: dict[str, dict] = {}
@@ -183,4 +321,6 @@ def summarize_feature_outcomes(rows: list[dict]) -> dict:
         "labeled_signals": len(labeled),
         "by_trend_regime": group("trend_regime"),
         "by_volatility_regime": group("volatility_regime"),
+        "by_market_structure": group("market_structure"),
+        "by_structure_break": group("structure_break"),
     }
