@@ -28,6 +28,10 @@ from btc_quant_lab.service import sync_market
 app = typer.Typer(no_args_is_help=True)
 
 
+def _costs() -> dict:
+    return {"fee_bps": settings.bqr_fee_bps, "slippage_bps": settings.bqr_slippage_bps}
+
+
 @app.command()
 def serve(reload: bool = False):
     uvicorn.run(
@@ -48,8 +52,10 @@ def optimize_cmd(symbol: str = "BTCUSDT", interval: str = "1d", min_trades: int 
     rows = optimize(
         Store(settings.bqr_db_path).candles(symbol, interval),
         min_trades=min_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
     )
-    print(json.dumps(rows[:15], indent=2))
+    print(json.dumps({"cost_model": _costs(), "rows": rows[:15]}, indent=2))
 
 
 @app.command("walk-forward")
@@ -67,6 +73,8 @@ def walk_forward_cmd(
         test_bars=test_bars,
         step_bars=test_bars,
         min_train_trades=min_train_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
     )
     record_experiment(
         {
@@ -99,9 +107,13 @@ def features_cmd(
         max_pending=max_pending,
     )
     signals = detect_pivots(df, cfg)
-    trades, _ = reversal_backtest(signals)
+    trades, _ = reversal_backtest(
+        signals,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
     rows = build_feature_rows(df, signals, trades)
-    print(json.dumps({"summary": summarize_feature_outcomes(rows), "rows": rows}, indent=2))
+    print(json.dumps({"cost_model": _costs(), "summary": summarize_feature_outcomes(rows), "rows": rows}, indent=2))
 
 
 @app.command("robustness")
@@ -122,7 +134,11 @@ def robustness_cmd(
         max_pending=max_pending,
     )
     signals = detect_pivots(df, cfg)
-    trades, metrics = reversal_backtest(signals)
+    trades, metrics = reversal_backtest(
+        signals,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
     benchmark = buy_and_hold_benchmark(df)
     result = {
         "config": {
@@ -131,11 +147,17 @@ def robustness_cmd(
             "min_bars": min_bars,
             "max_pending": max_pending,
         },
+        "cost_model": _costs(),
         "metrics": metrics,
         "yearly": yearly_performance(trades),
         "benchmark": benchmark,
         "comparison": strategy_vs_buy_hold(metrics, benchmark),
-        "sensitivity": parameter_sensitivity(df, min_trades=max(10, min(20, len(trades)))),
+        "sensitivity": parameter_sensitivity(
+            df,
+            min_trades=max(10, min(20, len(trades))),
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
+        ),
         "monte_carlo": bootstrap_trade_paths(trades, simulations=simulations) if trades else None,
     }
     print(json.dumps(result, indent=2))
@@ -145,28 +167,43 @@ def robustness_cmd(
 def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
     store = Store(settings.bqr_db_path)
     df = store.candles(symbol, interval)
-    rows = optimize(df, min_trades=settings.bqr_ai_min_trades)
+    rows = optimize(
+        df,
+        min_trades=settings.bqr_ai_min_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
     wf = walk_forward(
         df,
         train_bars=min(1095, max(365, len(df) // 2)),
         test_bars=min(365, max(90, len(df) // 6)),
         min_train_trades=max(5, settings.bqr_ai_min_trades // 2),
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
     )
 
     feature_context = None
     if rows:
         cfg = PivotConfig(**rows[0]["config"])
         signals = detect_pivots(df, cfg)
-        trades, _ = reversal_backtest(signals)
+        trades, _ = reversal_backtest(
+            signals,
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
+        )
         feature_context = summarize_feature_outcomes(build_feature_rows(df, signals, trades))
 
     context = {
         "symbol": symbol,
         "interval": interval,
         "candles": len(df),
+        "cost_model": _costs(),
         "top_configurations_in_sample": rows[:10],
         "parameter_sensitivity": parameter_sensitivity(
-            df, min_trades=max(10, settings.bqr_ai_min_trades // 2)
+            df,
+            min_trades=max(10, settings.bqr_ai_min_trades // 2),
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
         ),
         "walk_forward": {
             "method": wf.get("method"),
@@ -195,6 +232,8 @@ def ai_research(
             interval=interval,
             iterations=iterations,
             min_trades=max(10, settings.bqr_ai_min_trades // 2),
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
         )
     )
     print(json.dumps(result, indent=2))
