@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -10,7 +10,7 @@ from btc_quant_lab.research.backtest import metrics_from_trades
 
 
 def _year(ts_ms: int) -> int:
-    return datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).year
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=UTC).year
 
 
 def yearly_performance(trades: list[Trade]) -> list[dict]:
@@ -44,7 +44,7 @@ def buy_and_hold_benchmark(df: pl.DataFrame) -> dict:
     years = elapsed_days / 365.25
     cagr = ((last_close / first_close) ** (1.0 / years) - 1.0) * 100.0 if years > 0 else None
 
-    closes = [float(x) for x in df["close"].to_list()]
+    closes = [float(value) for value in df["close"].to_list()]
     peak = closes[0]
     max_dd = 0.0
     for close in closes:
