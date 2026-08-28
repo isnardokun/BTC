@@ -29,9 +29,16 @@ store = Store(settings.bqr_db_path)
 WEB = Path(__file__).parent / "web"
 
 
+def _cost_model() -> dict:
+    return {
+        "fee_bps": settings.bqr_fee_bps,
+        "slippage_bps": settings.bqr_slippage_bps,
+    }
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "cost_model": _cost_model()}
 
 
 @app.post("/api/sync")
@@ -70,7 +77,11 @@ def chart(
     df = _load(symbol, interval)
     cfg = _config(motor, range_mode, min_bars, max_pending)
     sigs = detect_pivots(df, cfg)
-    trades, metrics = reversal_backtest(sigs)
+    trades, metrics = reversal_backtest(
+        sigs,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
 
     candles = [
         {
@@ -98,6 +109,7 @@ def chart(
         "pivots": pivots,
         "trades": trade_dicts(trades),
         "metrics": metrics,
+        "cost_model": _cost_model(),
     }
 
 
@@ -113,7 +125,11 @@ def features(
     df = _load(symbol, interval)
     cfg = _config(motor, range_mode, min_bars, max_pending)
     signals = detect_pivots(df, cfg)
-    trades, _ = reversal_backtest(signals)
+    trades, _ = reversal_backtest(
+        signals,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
     rows = build_feature_rows(df, signals, trades)
     return {
         "config": {
@@ -122,6 +138,7 @@ def features(
             "min_bars": min_bars,
             "max_pending": max_pending,
         },
+        "cost_model": _cost_model(),
         "summary": summarize_feature_outcomes(rows),
         "rows": rows,
     }
@@ -140,39 +157,54 @@ def robustness(
     df = _load(symbol, interval)
     cfg = _config(motor, range_mode, min_bars, max_pending)
     signals = detect_pivots(df, cfg)
-    trades, metrics = reversal_backtest(signals)
+    trades, metrics = reversal_backtest(
+        signals,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
     benchmark = buy_and_hold_benchmark(df)
-    result = {
+    return {
         "config": {
             "motor": motor,
             "range_mode": range_mode,
             "min_bars": min_bars,
             "max_pending": max_pending,
         },
+        "cost_model": _cost_model(),
         "metrics": metrics,
         "yearly": yearly_performance(trades),
         "benchmark": benchmark,
         "comparison": strategy_vs_buy_hold(metrics, benchmark),
-        "sensitivity": parameter_sensitivity(df, min_trades=max(10, min(20, len(trades)))),
+        "sensitivity": parameter_sensitivity(
+            df,
+            min_trades=max(10, min(20, len(trades))),
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
+        ),
         "monte_carlo": bootstrap_trade_paths(trades, simulations=simulations) if trades else None,
     }
-    return result
 
 
 @app.post("/api/optimize")
 def run_optimize(symbol: str = "BTCUSDT", interval: str = "1d", min_trades: int = 20):
     df = _load(symbol, interval)
-    rows = optimize(df, min_trades=min_trades)
+    rows = optimize(
+        df,
+        min_trades=min_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
     exp = record_experiment(
         {
             "kind": "optimizer",
             "symbol": symbol,
             "interval": interval,
             "status": "completed",
+            "cost_model": _cost_model(),
             "best": rows[0] if rows else None,
         }
     )
-    return {"experiment_id": exp["id"], "rows": rows[:25]}
+    return {"experiment_id": exp["id"], "cost_model": _cost_model(), "rows": rows[:25]}
 
 
 @app.post("/api/walk-forward")
@@ -190,6 +222,8 @@ def run_walk_forward(
         test_bars=test_bars,
         step_bars=test_bars,
         min_train_trades=min_train_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
     )
     exp = record_experiment(
         {
@@ -213,30 +247,44 @@ def experiments():
 @app.post("/api/ai/iterate")
 async def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
     df = _load(symbol, interval)
-    rows = optimize(df, min_trades=settings.bqr_ai_min_trades)
+    rows = optimize(
+        df,
+        min_trades=settings.bqr_ai_min_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
     wf = walk_forward(
         df,
         train_bars=min(1095, max(365, len(df) // 2)),
         test_bars=min(365, max(90, len(df) // 6)),
         min_train_trades=max(5, settings.bqr_ai_min_trades // 2),
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
     )
 
     feature_context = None
     if rows:
         best_cfg = PivotConfig(**rows[0]["config"])
         signals = detect_pivots(df, best_cfg)
-        trades, _ = reversal_backtest(signals)
-        feature_rows = build_feature_rows(df, signals, trades)
-        feature_context = summarize_feature_outcomes(feature_rows)
+        trades, _ = reversal_backtest(
+            signals,
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
+        )
+        feature_context = summarize_feature_outcomes(build_feature_rows(df, signals, trades))
 
     context = {
         "symbol": symbol,
         "interval": interval,
         "candles": len(df),
+        "cost_model": _cost_model(),
         "objective": "capturar movimientos sostenidos de BTC con señales operables de reversión",
         "top_configurations_in_sample": rows[:10],
         "parameter_sensitivity": parameter_sensitivity(
-            df, min_trades=max(10, settings.bqr_ai_min_trades // 2)
+            df,
+            min_trades=max(10, settings.bqr_ai_min_trades // 2),
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
         ),
         "walk_forward": {
             "method": wf.get("method"),
@@ -264,6 +312,8 @@ async def ai_research(
         interval=interval,
         iterations=iterations,
         min_trades=max(10, settings.bqr_ai_min_trades // 2),
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
     )
 
 
