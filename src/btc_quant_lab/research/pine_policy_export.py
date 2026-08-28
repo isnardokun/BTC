@@ -89,6 +89,11 @@ def _compile_expr(node: ast.AST) -> str:
     if isinstance(node, ast.UnaryOp):
         if isinstance(node.op, ast.Not):
             return f"not ({_compile_expr(node.operand)})"
+        if isinstance(node.op, (ast.USub, ast.UAdd)) and isinstance(node.operand, ast.Constant):
+            value = node.operand.value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric = float(value)
+                return repr(-numeric if isinstance(node.op, ast.USub) else numeric)
         if isinstance(node.op, ast.USub):
             return f"-({_compile_expr(node.operand)})"
         if isinstance(node.op, ast.UAdd):
@@ -140,8 +145,8 @@ def _compile_sequence(statements: list[ast.stmt]) -> str:
     if isinstance(first, ast.Return):
         if first.value is None:
             raise PinePolicyExportError("bare return is not exportable")
-        if rest:
-            raise PinePolicyExportError("unreachable statements after return are not allowed")
+        # A return terminates this branch. Any continuation belongs to a sibling path
+        # introduced by an enclosing if and must not be appended after the return.
         return _compile_expr(first.value)
 
     if isinstance(first, ast.If):
