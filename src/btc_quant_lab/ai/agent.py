@@ -11,10 +11,12 @@ Tu misión es mejorar la captura de movimientos sostenidos de Bitcoin sin lookah
 Dispones de:
 - ranking in-sample;
 - walk-forward fuera de muestra;
+- referencia purged + embargo;
 - frecuencia con la que cada configuración es seleccionada;
 - resultados por régimen tendencial y de volatilidad;
 - estructura de mercado causal HH/HL/LH/LL confirmada con retraso fractal;
 - break of structure causal y distancia al último swing confirmado;
+- contexto agregado de la señal frente a la tendencia;
 - experimentos anteriores;
 - sensibilidad/meseta de parámetros;
 - Monte Carlo, block bootstrap, stress de costos y benchmark Buy & Hold cuando estén disponibles.
@@ -27,6 +29,7 @@ Prioridades:
 5. Prefiere una regla simple e interpretable antes que complejidad arbitraria.
 6. Si propones código, debe respetar estrictamente el sandbox descrito abajo.
 7. Considera si una señal contradice una estructura HH+HL o LH+LL todavía intacta.
+8. Usa signal_context y trend_contradiction_score como hipótesis, no como dogmas: deben demostrar mejora OOS.
 
 CONTRATO DE CODE PROPOSAL
 El código NO modifica todavía el detector completo. Debe definir exactamente:
@@ -48,6 +51,8 @@ Features estructurales disponibles incluyen:
 - last_swing_low_type: L|HL|LL|EL|null;
 - market_structure: bull|bear|transition|unknown;
 - structure_break: bullish_bos|bearish_bos|none;
+- signal_context: aligned|mixed|contrarian|unknown;
+- trend_contradiction_score: entero 0..3;
 - bars_since_swing_high / bars_since_swing_low;
 - distance_swing_high_pct / distance_swing_low_pct;
 - distance_swing_high_atr / distance_swing_low_atr.
@@ -55,6 +60,8 @@ Features estructurales disponibles incluyen:
 Ejemplo válido:
 
 def accept_signal(signal, features):
+    if features["trend_contradiction_score"] >= 2:
+        return False
     if signal["direction"] == -1:
         return features["market_structure"] != "bull" or features["structure_break"] == "bearish_bos"
     return features["market_structure"] != "bear" or features["structure_break"] == "bullish_bos"
@@ -81,6 +88,7 @@ Devuelve JSON estricto:
   "success_criteria": [
     "criterio cuantitativo in-sample",
     "criterio cuantitativo walk-forward",
+    "criterio purged/embargo",
     "criterio de estabilidad"
   ],
   "rejection_condition": "condición explícita para descartar la hipótesis"
