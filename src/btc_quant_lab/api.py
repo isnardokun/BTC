@@ -16,11 +16,13 @@ from btc_quant_lab.research.analytics import (
     yearly_performance,
 )
 from btc_quant_lab.research.backtest import reversal_backtest, trade_dicts
+from btc_quant_lab.research.cost_stress import execution_cost_stress
 from btc_quant_lab.research.features import build_feature_rows, summarize_feature_outcomes
-from btc_quant_lab.research.montecarlo import bootstrap_trade_paths
+from btc_quant_lab.research.montecarlo import bootstrap_trade_blocks, bootstrap_trade_paths
 from btc_quant_lab.research.optimizer import optimize
 from btc_quant_lab.research.pivots import detect_pivots
 from btc_quant_lab.research.sensitivity import parameter_sensitivity
+from btc_quant_lab.research.stability import temporal_stability
 from btc_quant_lab.research.walkforward import walk_forward
 from btc_quant_lab.service import sync_market
 
@@ -85,24 +87,24 @@ def chart(
 
     candles = [
         {
-            "time": int(r["ts"] // 1000),
-            "open": r["open"],
-            "high": r["high"],
-            "low": r["low"],
-            "close": r["close"],
+            "time": int(row["ts"] // 1000),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
         }
-        for r in df.iter_rows(named=True)
+        for row in df.iter_rows(named=True)
     ]
     pivots = [
         {
-            "time": int(s.ts // 1000),
-            "direction": s.direction,
-            "top": s.top,
-            "bottom": s.bottom,
-            "price": s.confirm_price,
-            "bars_to_confirm": s.bars_to_confirm,
+            "time": int(signal.ts // 1000),
+            "direction": signal.direction,
+            "top": signal.top,
+            "bottom": signal.bottom,
+            "price": signal.confirm_price,
+            "bars_to_confirm": signal.bars_to_confirm,
         }
-        for s in sigs
+        for signal in sigs
     ]
     return {
         "candles": candles,
@@ -163,6 +165,8 @@ def robustness(
         slippage_bps=settings.bqr_slippage_bps,
     )
     benchmark = buy_and_hold_benchmark(df)
+    warmup = min(730, max(365, len(df) // 3))
+    window = min(365, max(90, len(df) // 8))
     return {
         "config": {
             "motor": motor,
@@ -182,6 +186,20 @@ def robustness(
             slippage_bps=settings.bqr_slippage_bps,
         ),
         "monte_carlo": bootstrap_trade_paths(trades, simulations=simulations) if trades else None,
+        "block_bootstrap": (
+            bootstrap_trade_blocks(trades, simulations=simulations, block_size=4)
+            if trades
+            else None
+        ),
+        "cost_stress": execution_cost_stress(signals),
+        "temporal_stability": temporal_stability(
+            df,
+            cfg,
+            warmup_bars=warmup,
+            window_bars=window,
+            fee_bps=settings.bqr_fee_bps,
+            slippage_bps=settings.bqr_slippage_bps,
+        ),
     }
 
 
@@ -263,6 +281,7 @@ async def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
     )
 
     feature_context = None
+    robustness_context = None
     if rows:
         best_cfg = PivotConfig(**rows[0]["config"])
         signals = detect_pivots(df, best_cfg)
@@ -272,6 +291,22 @@ async def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
             slippage_bps=settings.bqr_slippage_bps,
         )
         feature_context = summarize_feature_outcomes(build_feature_rows(df, signals, trades))
+        robustness_context = {
+            "block_bootstrap": (
+                bootstrap_trade_blocks(trades, simulations=1000, block_size=4)
+                if trades
+                else None
+            ),
+            "cost_stress": execution_cost_stress(signals),
+            "temporal_stability": temporal_stability(
+                df,
+                best_cfg,
+                warmup_bars=min(730, max(365, len(df) // 3)),
+                window_bars=min(365, max(90, len(df) // 8)),
+                fee_bps=settings.bqr_fee_bps,
+                slippage_bps=settings.bqr_slippage_bps,
+            ),
+        }
 
     context = {
         "symbol": symbol,
@@ -293,6 +328,7 @@ async def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
             "windows": wf.get("windows", [])[-5:],
         },
         "feature_outcomes_for_current_best": feature_context,
+        "robustness_for_current_best": robustness_context,
         "recent_experiments": list_experiments(20),
     }
     return await propose_iteration(context)
