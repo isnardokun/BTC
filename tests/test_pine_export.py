@@ -1,7 +1,7 @@
 import pytest
 
 from btc_quant_lab.models import PivotConfig
-from btc_quant_lab.research.pine_export import export_baseline_pine
+from btc_quant_lab.research.pine_export import export_baseline_pine, export_baseline_strategy_pine
 
 
 def test_pine_export_contains_close_only_resolution_and_frozen_config():
@@ -46,6 +46,23 @@ def test_m3_export_replaces_pending_candidate():
 def test_each_range_mode_exports_expected_geometry(range_mode: str, expected: str):
     source = export_baseline_pine(PivotConfig(range_mode=range_mode))
     assert expected in source
+
+
+def test_strategy_export_reverses_only_when_direction_changes():
+    source = export_baseline_strategy_pine(
+        PivotConfig(motor="M3", range_mode="R8", min_bars=2, max_pending=0)
+    )
+
+    assert "strategy(" in source
+    assert "process_orders_on_close=true" in source
+    assert "commission_value=0" in source
+    assert "slippage=0" in source
+    assert "if confirmedBear and bqrPositionDir != -1" in source
+    assert 'strategy.entry("BQR Short", strategy.short)' in source
+    assert "if confirmedBull and bqrPositionDir != 1" in source
+    assert 'strategy.entry("BQR Long", strategy.long)' in source
+    assert "(close - bqrEntryPrice) / bqrEntryPrice * 100.0" in source
+    assert "(bqrEntryPrice - close) / bqrEntryPrice * 100.0" in source
 
 
 def test_export_rejects_invalid_pending_value():
