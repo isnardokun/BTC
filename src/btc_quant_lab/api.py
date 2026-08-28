@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from btc_quant_lab.ai.agent import propose_iteration
+from btc_quant_lab.ai.research_loop import run_autonomous_research
 from btc_quant_lab.config import settings
 from btc_quant_lab.data.store import Store
 from btc_quant_lab.experiments import list_experiments, record_experiment
@@ -205,6 +206,23 @@ async def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
         "recent_experiments": list_experiments(20),
     }
     return await propose_iteration(context)
+
+
+@app.post("/api/ai/research")
+async def ai_research(
+    symbol: str = "BTCUSDT",
+    interval: str = "1d",
+    iterations: int = 3,
+):
+    df = _load(symbol, interval)
+    iterations = min(iterations, settings.bqr_ai_max_iterations)
+    return await run_autonomous_research(
+        df,
+        symbol=symbol,
+        interval=interval,
+        iterations=iterations,
+        min_trades=max(10, settings.bqr_ai_min_trades // 2),
+    )
 
 
 @app.get("/")
