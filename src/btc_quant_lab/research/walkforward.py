@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -14,7 +14,7 @@ from btc_quant_lab.research.pivots import detect_pivots
 
 
 def _iso(ts_ms: int) -> str:
-    return datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).date().isoformat()
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=UTC).date().isoformat()
 
 
 def _config_from_row(row: dict) -> PivotConfig:
@@ -107,7 +107,7 @@ def evaluate_fixed_config(
 
     aggregate = metrics_from_trades(all_trades)
     profitable_windows = sum(
-        1 for w in windows if w["metrics"]["compounded_return_pct"] > 0
+        1 for window in windows if window["metrics"]["compounded_return_pct"] > 0
     )
     aggregate["windows"] = len(windows)
     aggregate["profitable_windows"] = profitable_windows
@@ -220,7 +220,9 @@ def walk_forward(
 
     aggregate = metrics_from_trades(all_oos_trades)
     profitable_windows = sum(
-        1 for w in windows if w["out_of_sample"]["compounded_return_pct"] > 0
+        1
+        for window in windows
+        if window["out_of_sample"]["compounded_return_pct"] > 0
     )
     aggregate["windows"] = len(windows)
     aggregate["profitable_windows"] = profitable_windows
