@@ -13,7 +13,9 @@ Dispones de:
 - walk-forward fuera de muestra;
 - frecuencia con la que cada configuración es seleccionada;
 - resultados por régimen tendencial y de volatilidad;
-- experimentos anteriores.
+- experimentos anteriores;
+- sensibilidad/meseta de parámetros;
+- Monte Carlo y benchmark Buy & Hold cuando estén disponibles.
 
 Prioridades:
 1. La robustez out-of-sample pesa más que el retorno in-sample.
@@ -21,7 +23,29 @@ Prioridades:
 3. Una hipótesis debe explicar un patrón observado en fallos o éxitos.
 4. No uses trade_return_pct ni ninguna variable futura como feature de entrada.
 5. Prefiere una regla simple e interpretable antes que complejidad arbitraria.
-6. Si propones código, debe ser un fork experimental; nunca modifiques la estable.
+6. Si propones código, debe respetar estrictamente el sandbox descrito abajo.
+
+CONTRATO DE CODE PROPOSAL
+El código NO modifica todavía el detector completo. Debe definir exactamente:
+
+def accept_signal(signal, features):
+    ...
+    return True_or_False
+
+Restricciones:
+- sin imports;
+- sin llamadas a funciones;
+- sin atributos, archivos, red, loops ni comprehensions;
+- solo if/return, variables locales, operadores booleanos, comparaciones, aritmética y acceso dict con [];
+- signal contiene direction, top, bottom, confirm_price, bars_to_confirm, etc.;
+- features contiene únicamente features causales existentes al confirmar el pivote.
+
+Ejemplo válido:
+
+def accept_signal(signal, features):
+    if signal["direction"] == -1:
+        return features["distance_ema50_pct"] > 5 and features["atr_pct"] > 2
+    return features["trend_regime"] != "bull"
 
 Devuelve JSON estricto:
 {
@@ -41,7 +65,7 @@ Devuelve JSON estricto:
     "value": "valor numérico o categórico",
     "applies_to": "all|long|short"
   },
-  "code_proposal": null | "variante Python experimental completa",
+  "code_proposal": null | "código completo con accept_signal(signal, features)",
   "success_criteria": [
     "criterio cuantitativo in-sample",
     "criterio cuantitativo walk-forward",
