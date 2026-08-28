@@ -12,8 +12,9 @@
 
 ## H2 — Robustez
 - [x] walk-forward cronológico train/test
+- [x] holdout final invisible durante investigación autónoma
 - [x] Monte Carlo/bootstrap de secuencias de trades
-- [ ] costos/slippage
+- [x] fees y slippage configurables
 - [x] resultados por régimen tendencial y volatilidad
 - [x] resultados agregados por año
 - [x] benchmark buy-and-hold
@@ -40,23 +41,25 @@
 - [x] aceptación/rechazo automático por score OOS
 - [x] agente crítico independiente
 - [x] sandbox ejecutable restringido para forks de política de señales
+- [x] holdout final no expuesto a proponente ni crítico hasta terminar iteraciones
 - [ ] sandbox de mutaciones completas del detector
 - [ ] promoción asistida de variantes a stable
 
 ## H5 — Calidad de ingeniería
 - [x] CI con pytest + ruff
-- [x] tests de fórmula SHORT, equity compuesta y sandbox
+- [x] tests de fórmula SHORT, equity compuesta, costos y sandbox
 - [ ] cobertura ampliada de API/IA
 - [ ] benchmarks de rendimiento
 - [ ] cache de optimizaciones costosas
 
 ## H6 — Próxima capa cuantitativa
-- [ ] costos, slippage y fees configurables
 - [ ] validación purged/embargo para experimentos con features
 - [ ] bootstrap por bloques/regímenes, no solo IID trades
-- [ ] estabilidad temporal del champion
+- [ ] estabilidad temporal del champion / champion decay
+- [ ] estructura HH/HL/LH/LL explícita como feature
 - [ ] comparación contra estrategias triviales long-only/EMA
 - [ ] promoción por múltiples semillas de Monte Carlo
+- [ ] stress test de fees/slippage
 
 ## H7 — Exportación
 - [ ] Pine Script
