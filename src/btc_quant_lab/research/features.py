@@ -176,6 +176,50 @@ def _causal_market_structure(
     }
 
 
+def _signal_context(
+    direction: int,
+    trend_regime: str,
+    market_structure: str,
+    structure_break: str,
+) -> tuple[str, int]:
+    """Score how strongly a signal contradicts causal trend evidence.
+
+    Score is 0..3. Each known context layer adds one contradiction point when it
+    points opposite to the proposed trade direction.
+    """
+    contradiction = 0
+    known_layers = 0
+
+    if trend_regime in {"bull", "bear"}:
+        known_layers += 1
+        if (direction == 1 and trend_regime == "bear") or (
+            direction == -1 and trend_regime == "bull"
+        ):
+            contradiction += 1
+
+    if market_structure in {"bull", "bear"}:
+        known_layers += 1
+        if (direction == 1 and market_structure == "bear") or (
+            direction == -1 and market_structure == "bull"
+        ):
+            contradiction += 1
+
+    if structure_break in {"bullish_bos", "bearish_bos"}:
+        known_layers += 1
+        if (direction == 1 and structure_break == "bearish_bos") or (
+            direction == -1 and structure_break == "bullish_bos"
+        ):
+            contradiction += 1
+
+    if known_layers == 0:
+        return "unknown", contradiction
+    if contradiction == 0:
+        return "aligned", contradiction
+    if contradiction == known_layers:
+        return "contrarian", contradiction
+    return "mixed", contradiction
+
+
 def build_feature_rows(
     df: pl.DataFrame,
     signals: list[PivotSignal],
@@ -241,6 +285,14 @@ def build_feature_rows(
         signal_range = sig.top - sig.bottom
         swing_high = market["last_swing_high"][i]
         swing_low = market["last_swing_low"][i]
+        market_structure = market["market_structure"][i]
+        structure_break = market["structure_break"][i]
+        signal_context, contradiction_score = _signal_context(
+            int(sig.direction),
+            trend_regime,
+            market_structure,
+            structure_break,
+        )
 
         rows.append(
             {
@@ -264,8 +316,10 @@ def build_feature_rows(
                 "volatility_regime": volatility_regime,
                 "last_swing_high_type": market["last_swing_high_type"][i],
                 "last_swing_low_type": market["last_swing_low_type"][i],
-                "market_structure": market["market_structure"][i],
-                "structure_break": market["structure_break"][i],
+                "market_structure": market_structure,
+                "structure_break": structure_break,
+                "signal_context": signal_context,
+                "trend_contradiction_score": contradiction_score,
                 "bars_since_swing_high": market["bars_since_swing_high"][i],
                 "bars_since_swing_low": market["bars_since_swing_low"][i],
                 "distance_swing_high_pct": (
@@ -300,6 +354,8 @@ def summarize_feature_outcomes(rows: list[dict]) -> dict:
             "by_volatility_regime": {},
             "by_market_structure": {},
             "by_structure_break": {},
+            "by_signal_context": {},
+            "by_contradiction_score": {},
         }
 
     def group(key: str) -> dict:
@@ -323,4 +379,6 @@ def summarize_feature_outcomes(rows: list[dict]) -> dict:
         "by_volatility_regime": group("volatility_regime"),
         "by_market_structure": group("market_structure"),
         "by_structure_break": group("structure_break"),
+        "by_signal_context": group("signal_context"),
+        "by_contradiction_score": group("trend_contradiction_score"),
     }
