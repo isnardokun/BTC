@@ -20,8 +20,8 @@ def _market(n: int = 520) -> pl.DataFrame:
     )
 
 
-def _stable_fake_detector(df, _fork_id, config=None):
-    del config
+def _stable_fake_detector(df, _fork_id, config=None, image=None):
+    del config, image
     signals = []
     for i in range(120, len(df), 40):
         signals.append(
@@ -66,6 +66,7 @@ def test_boundary_gap_oos_excludes_boundary_bars(monkeypatch):
 
 def test_collect_detector_evidence_requires_prepared_sandbox(monkeypatch):
     monkeypatch.setattr(detector_candidate, "full_detector_sandbox_ready", lambda: False)
+    monkeypatch.setattr(detector_candidate, "sandbox_ready", lambda _image: False)
     with pytest.raises(DetectorSandboxError, match="setup_detector_sandbox_arch"):
         detector_candidate.collect_detector_candidate_evidence(
             _market(),
