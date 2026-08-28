@@ -24,6 +24,86 @@ def _config_key(cfg: PivotConfig) -> str:
     return f"{cfg.motor}/{cfg.range_mode}/min{cfg.min_bars}/pend{cfg.max_pending}"
 
 
+def _trades_inside_window(
+    df: pl.DataFrame,
+    cfg: PivotConfig,
+    test_start: int,
+    test_end: int,
+) -> list[Trade]:
+    timestamps = df["ts"].to_list()
+    history_to_test_end = df.slice(0, test_end)
+    signals = detect_pivots(history_to_test_end, cfg)
+    trades, _ = reversal_backtest(signals)
+    test_start_ts = int(timestamps[test_start])
+    test_end_ts = int(timestamps[test_end - 1])
+    return [
+        trade
+        for trade in trades
+        if trade.entry_ts >= test_start_ts and trade.exit_ts <= test_end_ts
+    ]
+
+
+def evaluate_fixed_config(
+    df: pl.DataFrame,
+    cfg: PivotConfig,
+    warmup_bars: int = 1095,
+    test_bars: int = 365,
+    step_bars: int | None = None,
+) -> dict:
+    """Evaluate one frozen configuration on chronological windows after a warmup period."""
+    step_bars = step_bars or test_bars
+    if warmup_bars < 100 or test_bars < 30 or step_bars < 1:
+        raise ValueError("evaluation windows are too small")
+    if len(df) < warmup_bars + test_bars:
+        return {
+            "config": asdict(cfg),
+            "windows": [],
+            "aggregate": metrics_from_trades([]),
+            "error": "not_enough_history",
+        }
+
+    timestamps = df["ts"].to_list()
+    windows: list[dict] = []
+    all_trades: list[Trade] = []
+    test_start = warmup_bars
+
+    while test_start + test_bars <= len(df):
+        test_end = test_start + test_bars
+        oos_trades = _trades_inside_window(df, cfg, test_start, test_end)
+        metrics = metrics_from_trades(oos_trades)
+        all_trades.extend(oos_trades)
+        windows.append(
+            {
+                "test": {
+                    "start": _iso(int(timestamps[test_start])),
+                    "end": _iso(int(timestamps[test_end - 1])),
+                    "bars": test_bars,
+                },
+                "metrics": metrics,
+            }
+        )
+        test_start += step_bars
+
+    aggregate = metrics_from_trades(all_trades)
+    profitable_windows = sum(1 for w in windows if w["metrics"]["net_return_pct"] > 0)
+    aggregate["windows"] = len(windows)
+    aggregate["profitable_windows"] = profitable_windows
+    aggregate["profitable_windows_pct"] = (
+        profitable_windows * 100.0 / len(windows) if windows else None
+    )
+
+    return {
+        "config": asdict(cfg),
+        "method": {
+            "warmup_bars": warmup_bars,
+            "test_bars": test_bars,
+            "step_bars": step_bars,
+        },
+        "windows": windows,
+        "aggregate": aggregate,
+    }
+
+
 def walk_forward(
     df: pl.DataFrame,
     train_bars: int = 1095,
@@ -66,23 +146,12 @@ def walk_forward(
         best = ranked[0]
         cfg = _config_from_row(best)
         selected[_config_key(cfg)] += 1
-
-        # Rebuild signals using all history available up to the end of this test window.
-        # This preserves causal state/warmup without giving the detector future candles.
-        history_to_test_end = df.slice(0, test_end)
-        signals = detect_pivots(history_to_test_end, cfg)
-        trades, _ = reversal_backtest(signals)
-
-        test_start_ts = int(timestamps[test_start])
-        test_end_ts = int(timestamps[test_end - 1])
-        oos_trades = [
-            t
-            for t in trades
-            if t.entry_ts >= test_start_ts and t.exit_ts <= test_end_ts
-        ]
+        oos_trades = _trades_inside_window(df, cfg, test_start, test_end)
         oos_metrics = metrics_from_trades(oos_trades)
         all_oos_trades.extend(oos_trades)
 
+        test_start_ts = int(timestamps[test_start])
+        test_end_ts = int(timestamps[test_end - 1])
         windows.append(
             {
                 "train": {
