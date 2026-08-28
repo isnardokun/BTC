@@ -13,7 +13,7 @@
     main{display:grid;grid-template-columns:minmax(0,1fr) 460px;height:calc(100vh - 60px)}#chart{min-width:0}
     aside{overflow:auto;border-left:1px solid var(--line);padding:12px;background:var(--panel)}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
     .card{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px}.card h3{font-size:12px;margin:0 0 8px}.metric{display:flex;justify-content:space-between;border-bottom:1px solid #202735;padding:5px 0;font-size:12px}
-    table{width:100%;border-collapse:collapse;font-size:10px}th,td{padding:5px;border-bottom:1px solid #222a37;text-align:right}th:first-child,td:first-child{text-align:left}.muted{color:var(--muted);font-size:11px}pre{white-space:pre-wrap;font-size:10px;max-height:340px;overflow:auto}.good{color:#57d68d}.bad{color:#ff6b6b}
+    table{width:100%;border-collapse:collapse;font-size:10px}th,td{padding:5px;border-bottom:1px solid #222a37;text-align:right}th:first-child,td:first-child{text-align:left}.muted{color:var(--muted);font-size:11px}pre{white-space:pre-wrap;font-size:10px;max-height:420px;overflow:auto}.good{color:#57d68d}.bad{color:#ff6b6b}
   </style>
 </head>
 <body>
@@ -23,7 +23,7 @@
   <button onclick="loadAll()">Actualizar</button>
   <button onclick="runOptimize()">Optimizar</button>
   <button onclick="runWalkForward()">Walk-forward</button>
-  <button onclick="runAI()">IA: experimento</button>
+  <button onclick="runAI()">IA autónoma ×3</button>
 </header>
 <main>
   <div id="chart"></div>
@@ -38,7 +38,7 @@
     <div class="card"><h3>Rendimiento por régimen</h3><div id="regimes" class="muted">Cargando...</div></div>
     <div class="card"><h3>Walk-forward fuera de muestra</h3><div id="walkforward" class="muted">Ejecuta Walk-forward.</div></div>
     <div class="card"><h3>Ranking in-sample</h3><div id="ranking" class="muted">Ejecuta Optimizar.</div></div>
-    <div class="card"><h3>Agente IA</h3><pre id="ai" class="muted">MiniMax es opcional.</pre></div>
+    <div class="card"><h3>Agente IA / Research Loop</h3><pre id="ai" class="muted">MiniMax es opcional. Las propuestas de parámetros y filtros se evalúan automáticamente; el código queda aislado en forks.</pre></div>
   </aside>
 </main>
 <script>
@@ -52,7 +52,7 @@ async function loadAll(){await Promise.all([loadChart(),loadFeatures()])}
 async function syncData(){const r=await fetch('/api/sync',{method:'POST'}),d=await r.json();alert(JSON.stringify(d));await loadAll()}
 async function runOptimize(){ranking.innerHTML='Calculando 96 configuraciones...';const r=await fetch('/api/optimize',{method:'POST'}),d=await r.json();if(!r.ok){ranking.textContent=d.detail||'Error';return}ranking.innerHTML='<table><tr><th>#</th><th>Config</th><th>Trades</th><th>Net%</th><th>Exp%</th><th>PF</th><th>DD</th></tr>'+d.rows.slice(0,15).map((x,i)=>`<tr><td>${i+1}</td><td>${x.config.motor}/${x.config.range_mode}/${x.config.min_bars}/${x.config.max_pending}</td><td>${x.trades}</td><td>${x.net_return_pct.toFixed(2)}</td><td>${x.expectancy_pct?.toFixed(3)??'—'}</td><td>${x.profit_factor?.toFixed(2)??'—'}</td><td>${x.max_drawdown_pct.toFixed(2)}</td></tr>`).join('')+'</table>'}
 async function runWalkForward(){walkforward.innerHTML='Optimizando ventanas y evaluando OOS...';const r=await fetch('/api/walk-forward',{method:'POST'}),d=await r.json();if(!r.ok){walkforward.textContent=d.detail||'Error';return}const a=d.aggregate||{};walkforward.innerHTML=`<div class="metric"><span>Ventanas</span><b>${a.windows??0}</b></div><div class="metric"><span>Ventanas rentables</span><b>${pct(a.profitable_windows_pct,1)}</b></div><div class="metric"><span>Trades OOS</span><b>${a.trades??0}</b></div><div class="metric"><span>Net OOS</span><b class="${a.net_return_pct>=0?'good':'bad'}">${pct(a.net_return_pct)}</b></div><div class="metric"><span>Expectancy OOS</span><b>${pct(a.expectancy_pct,3)}</b></div><div class="metric"><span>PF OOS</span><b>${a.profit_factor?.toFixed(2)??'—'}</b></div><div class="metric"><span>Max DD OOS</span><b>${pct(a.max_drawdown_pct)}</b></div><div class="muted" style="margin-top:8px">Selección: ${Object.entries(d.selection_frequency||{}).slice(0,5).map(([k,v])=>k+' ×'+v).join(' · ')}</div>`}
-async function runAI(){ai.textContent='Analizando in-sample, OOS y regímenes...';const r=await fetch('/api/ai/iterate',{method:'POST'}),d=await r.json();ai.textContent=JSON.stringify(d,null,2)}
+async function runAI(){ai.textContent='MiniMax está proponiendo y evaluando 3 experimentos de forma autónoma...';const r=await fetch('/api/ai/research?iterations=3',{method:'POST'}),d=await r.json();if(!r.ok){ai.textContent=JSON.stringify(d,null,2);return}const c=d.champion||{};const a=c.out_of_sample?.aggregate||{};ai.textContent=`CHAMPION\n${JSON.stringify(c.config,null,2)}\nFiltro: ${JSON.stringify(c.filter)}\nScore robustez: ${c.robustness_score}\nOOS: trades=${a.trades}, net=${a.net_return_pct}, exp=${a.expectancy_pct}, PF=${a.profit_factor}, DD=${a.max_drawdown_pct}\n\nEVALUACIONES\n${JSON.stringify(d.evaluations,null,2)}`}
 loadAll();setInterval(()=>loadChart().catch(()=>{}),60000);
 </script>
 </body>
