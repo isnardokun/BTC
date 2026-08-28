@@ -9,8 +9,9 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 3. `docs/RESEARCH.md`
 4. `docs/WALK_FORWARD.md`
 5. `docs/AI_RESEARCHER.md`
-6. `experiments/ledger.jsonl`
-7. tests
+6. `docs/ROADMAP.md`
+7. `experiments/ledger.jsonl`
+8. tests
 
 ## Reglas
 - No usar lookahead ni datos futuros.
@@ -20,8 +21,9 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - Cambios experimentales van en `experiments/forks/`.
 - Añadir tests cuando cambie la semántica del detector.
 - Preferir regiones estables de parámetros a un único máximo in-sample.
-- `trade_return_pct` es un label futuro de investigación y nunca puede ser una feature de entrada.
-- El código generado por IA se guarda en fork y NO se ejecuta automáticamente hasta disponer de sandbox.
+- `trade_return_pct` es un label futuro y nunca puede ser una feature de entrada.
+- Un candidato autónomo debe mejorar OOS y ser aprobado por el agente crítico.
+- El sandbox actual solo admite políticas `accept_signal(signal, features)` con AST restringido; no convertirlo silenciosamente en ejecución Python arbitraria.
 
 ## Estado actual
 
@@ -31,23 +33,29 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - `min_bars`: 2, 3, 4, 5;
 - `max_pending`: 0, 3, 5, 8.
 
-### Benchmark
+### Benchmark operativo
 - pivote alcista confirmado → LONG;
 - pivote bajista confirmado → SHORT;
 - señal contraria cierra y revierte;
 - retorno medido desde el precio real de confirmación;
-- retorno SHORT = `(entry - exit) / entry * 100`.
+- LONG = `(exit - entry) / entry * 100`;
+- SHORT = `(entry - exit) / entry * 100`;
+- `compounded_return_pct` modela reinversión secuencial;
+- `max_drawdown_pct` se calcula sobre equity compuesta.
 
 ### Robustez
-- `research/walkforward.py` implementa train/test cronológico;
-- `evaluate_fixed_config()` mide una configuración congelada en ventanas posteriores;
-- `research/features.py` genera features causales y regímenes;
-- `research/filters.py` permite filtros causales seguros para experimentos.
+- `research/walkforward.py`: train/test cronológico;
+- `research/features.py`: features causales y regímenes;
+- `research/filters.py`: filtros declarativos;
+- `research/analytics.py`: resultados anuales y Buy & Hold;
+- `research/sensitivity.py`: meseta de parámetros;
+- `research/montecarlo.py`: bootstrap de secuencias de trades.
 
 ### IA
-- `ai/agent.py`: propone una hipótesis;
-- `ai/research_loop.py`: propone → evalúa OOS → acepta/rechaza parámetros/filtros;
-- propuestas de código quedan `awaiting_sandbox`.
+- `ai/agent.py`: investigador que propone;
+- `ai/sandbox.py`: ejecuta código restringido de política de señales;
+- `ai/critic.py`: crítico independiente;
+- `ai/research_loop.py`: propone → ejecuta → OOS → crítico → acepta/rechaza.
 
 ## Comandos de referencia
 
@@ -58,17 +66,20 @@ bqrl sync --symbol BTCUSDT --interval 1d
 bqrl optimize --symbol BTCUSDT --interval 1d
 bqrl walk-forward --symbol BTCUSDT --interval 1d
 bqrl features --symbol BTCUSDT --interval 1d
+bqrl robustness --symbol BTCUSDT --interval 1d
 bqrl ai-research --symbol BTCUSDT --interval 1d --iterations 3
 ```
 
 ## Flujo
 ```text
-baseline → hipótesis → parámetros/filtro/fork → tests → OOS → comparación → aceptar/rechazar
+baseline → hipótesis → parámetros/filtro/código restringido → OOS → robustez → crítico → aceptar/rechazar
 ```
 
 ## Próximas prioridades
-1. hacer ejecutable el sandbox de forks de código;
-2. añadir resultados por año y benchmark buy-and-hold;
-3. sensibilidad/mesetas de parámetros;
-4. Monte Carlo/bootstrap de secuencias de trades;
-5. agente crítico independiente antes de promover una variante.
+1. costos/slippage/fees configurables;
+2. purged/embargo validation para features;
+3. bootstrap por bloques y regímenes;
+4. estructura HH/HL/LH/LL explícita;
+5. estabilidad temporal del champion;
+6. sandbox de mutaciones completas del detector mediante proceso/contenedor aislado;
+7. promoción asistida a una rama/tag `stable`.
