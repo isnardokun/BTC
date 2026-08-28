@@ -18,7 +18,7 @@ from btc_quant_lab.research.analytics import (
     strategy_vs_buy_hold,
     yearly_performance,
 )
-from btc_quant_lab.research.backtest import reversal_backtest
+from btc_quant_lab.research.backtest import metrics_from_trades, reversal_backtest
 from btc_quant_lab.research.features import build_feature_rows, summarize_feature_outcomes
 from btc_quant_lab.research.filters import filter_signals, validate_filter_spec
 from btc_quant_lab.research.montecarlo import bootstrap_trade_paths
@@ -168,6 +168,49 @@ def _critic_payload(champion: dict, candidate: dict, sensitivity: dict) -> dict:
     }
 
 
+def _signals_for_champion(df: pl.DataFrame, champion: dict):
+    cfg = PivotConfig(**champion["config"])
+    signals = detect_pivots(df, cfg)
+    if champion.get("kind") == "sandbox_code_policy":
+        return apply_signal_policy(df, signals, champion["code_policy"])
+    return filter_signals(df, signals, champion.get("filter"))
+
+
+def _evaluate_final_holdout(
+    full_df: pl.DataFrame,
+    champion: dict,
+    holdout_start_index: int,
+) -> dict:
+    signals = _signals_for_champion(full_df, champion)
+    trades, _ = reversal_backtest(signals)
+    timestamps = full_df["ts"].to_list()
+    start_ts = int(timestamps[holdout_start_index])
+    end_ts = int(timestamps[-1])
+    holdout_trades = [
+        trade
+        for trade in trades
+        if int(trade.entry_ts) >= start_ts and int(trade.exit_ts) <= end_ts
+    ]
+    metrics = metrics_from_trades(holdout_trades)
+    holdout_df = full_df.slice(holdout_start_index, len(full_df) - holdout_start_index)
+    benchmark = buy_and_hold_benchmark(holdout_df)
+    return {
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "bars": len(holdout_df),
+        "metrics": metrics,
+        "yearly": yearly_performance(holdout_trades),
+        "benchmark": benchmark,
+        "vs_buy_hold": strategy_vs_buy_hold(metrics, benchmark),
+        "monte_carlo": (
+            bootstrap_trade_paths(holdout_trades, simulations=2000)
+            if holdout_trades
+            else None
+        ),
+        "note": "final holdout was not exposed to the proposing or critic agents during iteration",
+    }
+
+
 async def run_autonomous_research(
     df: pl.DataFrame,
     symbol: str = "BTCUSDT",
@@ -179,20 +222,32 @@ async def run_autonomous_research(
         raise ValueError("market data is empty")
     if iterations < 1 or iterations > 20:
         raise ValueError("iterations must be between 1 and 20")
+    if len(df) < 700:
+        raise ValueError("autonomous research needs at least 700 bars to preserve a final holdout")
 
-    warmup_bars = min(1095, max(365, len(df) // 2))
-    test_bars = min(365, max(90, len(df) // 6))
-    if warmup_bars + test_bars > len(df):
-        warmup_bars = max(100, len(df) // 2)
-        test_bars = max(30, min(len(df) - warmup_bars, len(df) // 4))
+    holdout_bars = min(730, max(180, len(df) // 6))
+    development_end = len(df) - holdout_bars
+    if development_end < 500:
+        holdout_bars = max(120, len(df) // 5)
+        development_end = len(df) - holdout_bars
+    development_df = df.slice(0, development_end)
 
-    ranked = optimize(df, min_trades=min_trades)
+    warmup_bars = min(1095, max(365, len(development_df) // 2))
+    test_bars = min(365, max(90, len(development_df) // 6))
+    if warmup_bars + test_bars > len(development_df):
+        warmup_bars = max(100, len(development_df) // 2)
+        test_bars = max(
+            30,
+            min(len(development_df) - warmup_bars, len(development_df) // 4),
+        )
+
+    ranked = optimize(development_df, min_trades=min_trades)
     if not ranked:
         raise ValueError("optimizer produced no baseline")
 
     baseline_cfg = PivotConfig(**ranked[0]["config"])
     champion = _evaluate_candidate(
-        df,
+        development_df,
         baseline_cfg,
         None,
         warmup_bars,
@@ -200,7 +255,7 @@ async def run_autonomous_research(
         min_trades,
     )
     champion["source"] = "baseline"
-    sensitivity = parameter_sensitivity(df, min_trades=min_trades)
+    sensitivity = parameter_sensitivity(development_df, min_trades=min_trades)
 
     outcomes: list[dict] = []
     for iteration in range(1, iterations + 1):
@@ -209,6 +264,11 @@ async def run_autonomous_research(
             "interval": interval,
             "iteration": iteration,
             "objective": "capturar movimientos sostenidos de BTC con señales de reversión robustas fuera de muestra",
+            "research_protocol": {
+                "development_bars": len(development_df),
+                "final_holdout_bars": holdout_bars,
+                "final_holdout_is_hidden": True,
+            },
             "current_champion": champion,
             "top_in_sample": ranked[:10],
             "parameter_sensitivity": sensitivity,
@@ -218,6 +278,7 @@ async def run_autonomous_research(
                 "candidate_must_beat_champion_out_of_sample": True,
                 "minimum_oos_trades": min_trades,
                 "critic_must_approve": True,
+                "final_holdout_must_remain_hidden_until_iterations_finish": True,
                 "stable_branch_is_immutable": True,
             },
         }
@@ -234,7 +295,7 @@ async def run_autonomous_research(
                 if not source:
                     raise ValueError("code proposal is empty")
                 candidate = _evaluate_code_candidate(
-                    df,
+                    development_df,
                     cfg,
                     source,
                     warmup_bars,
@@ -249,7 +310,7 @@ async def run_autonomous_research(
                     raise ValueError(f"unsupported proposal_type: {proposal_type}")
 
                 candidate = _evaluate_candidate(
-                    df,
+                    development_df,
                     cfg,
                     signal_filter,
                     warmup_bars,
@@ -264,8 +325,18 @@ async def run_autonomous_research(
             critic = None
             critic_approved = False
             if score_improved:
-                critic = await review_candidate(_critic_payload(champion, candidate, sensitivity))
-                critic_approved = critic.get("verdict") == "approve"
+                try:
+                    critic = await review_candidate(
+                        _critic_payload(champion, candidate, sensitivity)
+                    )
+                    critic_approved = critic.get("verdict") == "approve"
+                except Exception as exc:
+                    critic = {
+                        "verdict": "reject",
+                        "rationale": "critic execution failed; conservative rejection",
+                        "concerns": [str(exc)],
+                        "required_followups": ["retry critic before promotion"],
+                    }
 
             accepted = score_improved and critic_approved
             status = "accepted_candidate" if accepted else "rejected"
@@ -279,7 +350,7 @@ async def run_autonomous_research(
                     "champion_score_before": champion_score,
                     "score_improved": score_improved,
                     "critic": critic,
-                    "decision_rule": "OOS robustness must improve and independent critic must approve",
+                    "decision_rule": "development OOS robustness must improve and independent critic must approve",
                 }
             )
             outcomes.append(evaluation)
@@ -297,11 +368,19 @@ async def run_autonomous_research(
             )
             outcomes.append(evaluation)
 
+    final_holdout = _evaluate_final_holdout(df, champion, development_end)
     return {
         "symbol": symbol,
         "interval": interval,
         "iterations": iterations,
+        "protocol": {
+            "total_bars": len(df),
+            "development_bars": len(development_df),
+            "final_holdout_bars": holdout_bars,
+            "holdout_exposed_during_research": False,
+        },
         "champion": champion,
         "parameter_sensitivity": sensitivity,
         "evaluations": outcomes,
+        "final_holdout": final_holdout,
     }
