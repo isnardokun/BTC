@@ -27,7 +27,7 @@ def _load_variant():
     spec.loader.exec_module(module)
     detect = getattr(module, "detect", None)
     if not callable(detect):
-        raise RuntimeError("detector_variant.py must define detect(candles, config)")
+        raise TypeError("detector_variant.py must define detect(candles, config)")
     return detect
 
 
