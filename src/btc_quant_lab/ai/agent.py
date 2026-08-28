@@ -80,7 +80,7 @@ def _extract_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.S)
+        match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise
         return json.loads(match.group(0))
