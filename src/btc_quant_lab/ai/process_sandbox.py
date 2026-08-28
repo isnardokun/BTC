@@ -47,7 +47,7 @@ def podman_image_available(image: str = DEFAULT_IMAGE) -> bool:
     if executable is None:
         return False
     try:
-        completed = subprocess.run(  # noqa: S603 - fixed trusted executable and argv, no shell
+        completed = subprocess.run(
             [executable, "image", "exists", image],
             check=False,
             capture_output=True,
@@ -276,7 +276,7 @@ def run_detector_fork(
             podman_executable=executable,
         )
         try:
-            completed = subprocess.run(  # noqa: S603 - argv only; isolated rootless container is the boundary
+            completed = subprocess.run(
                 command,
                 check=False,
                 capture_output=True,
