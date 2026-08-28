@@ -82,10 +82,16 @@ def _evaluate_candidate(
     warmup_bars: int,
     test_bars: int,
     min_trades: int,
+    fee_bps: float,
+    slippage_bps: float,
 ) -> dict:
     signals = detect_pivots(df, cfg)
     signals = filter_signals(df, signals, signal_filter)
-    trades, full_metrics = reversal_backtest(signals)
+    trades, full_metrics = reversal_backtest(
+        signals,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
     oos = evaluate_fixed_config(
         df,
         cfg,
@@ -93,12 +99,15 @@ def _evaluate_candidate(
         test_bars=test_bars,
         step_bars=test_bars,
         signal_filter=signal_filter,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
     )
     benchmark = buy_and_hold_benchmark(df)
     return {
         "kind": "parameters_or_filter",
         "config": _config_dict(cfg),
         "filter": signal_filter,
+        "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
         "full_history": full_metrics,
         "out_of_sample": oos,
         "robustness_score": robustness_score(oos["aggregate"], min_trades=min_trades),
@@ -117,10 +126,16 @@ def _evaluate_code_candidate(
     warmup_bars: int,
     test_bars: int,
     min_trades: int,
+    fee_bps: float,
+    slippage_bps: float,
 ) -> dict:
     signals = detect_pivots(df, cfg)
     signals = apply_signal_policy(df, signals, source)
-    trades, full_metrics = reversal_backtest(signals)
+    trades, full_metrics = reversal_backtest(
+        signals,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
     oos = evaluate_sandbox_policy(
         df,
         cfg,
@@ -128,6 +143,8 @@ def _evaluate_code_candidate(
         warmup_bars=warmup_bars,
         test_bars=test_bars,
         step_bars=test_bars,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
     )
     benchmark = buy_and_hold_benchmark(df)
     return {
@@ -135,6 +152,7 @@ def _evaluate_code_candidate(
         "config": _config_dict(cfg),
         "filter": None,
         "code_policy": source,
+        "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
         "full_history": full_metrics,
         "out_of_sample": oos,
         "robustness_score": robustness_score(oos["aggregate"], min_trades=min_trades),
@@ -152,6 +170,7 @@ def _critic_payload(champion: dict, candidate: dict, sensitivity: dict) -> dict:
             "kind": item.get("kind"),
             "config": item.get("config"),
             "filter": item.get("filter"),
+            "cost_model": item.get("cost_model"),
             "robustness_score": item.get("robustness_score"),
             "full_history": item.get("full_history"),
             "oos_aggregate": item.get("out_of_sample", {}).get("aggregate"),
@@ -180,9 +199,15 @@ def _evaluate_final_holdout(
     full_df: pl.DataFrame,
     champion: dict,
     holdout_start_index: int,
+    fee_bps: float,
+    slippage_bps: float,
 ) -> dict:
     signals = _signals_for_champion(full_df, champion)
-    trades, _ = reversal_backtest(signals)
+    trades, _ = reversal_backtest(
+        signals,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
     timestamps = full_df["ts"].to_list()
     start_ts = int(timestamps[holdout_start_index])
     end_ts = int(timestamps[-1])
@@ -198,6 +223,7 @@ def _evaluate_final_holdout(
         "start_ts": start_ts,
         "end_ts": end_ts,
         "bars": len(holdout_df),
+        "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
         "metrics": metrics,
         "yearly": yearly_performance(holdout_trades),
         "benchmark": benchmark,
@@ -217,6 +243,8 @@ async def run_autonomous_research(
     interval: str = "1d",
     iterations: int = 3,
     min_trades: int = 15,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> dict:
     if df.is_empty():
         raise ValueError("market data is empty")
@@ -241,7 +269,12 @@ async def run_autonomous_research(
             min(len(development_df) - warmup_bars, len(development_df) // 4),
         )
 
-    ranked = optimize(development_df, min_trades=min_trades)
+    ranked = optimize(
+        development_df,
+        min_trades=min_trades,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
     if not ranked:
         raise ValueError("optimizer produced no baseline")
 
@@ -253,9 +286,16 @@ async def run_autonomous_research(
         warmup_bars,
         test_bars,
         min_trades,
+        fee_bps,
+        slippage_bps,
     )
     champion["source"] = "baseline"
-    sensitivity = parameter_sensitivity(development_df, min_trades=min_trades)
+    sensitivity = parameter_sensitivity(
+        development_df,
+        min_trades=min_trades,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
 
     outcomes: list[dict] = []
     for iteration in range(1, iterations + 1):
@@ -268,6 +308,7 @@ async def run_autonomous_research(
                 "development_bars": len(development_df),
                 "final_holdout_bars": holdout_bars,
                 "final_holdout_is_hidden": True,
+                "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
             },
             "current_champion": champion,
             "top_in_sample": ranked[:10],
@@ -279,6 +320,7 @@ async def run_autonomous_research(
                 "minimum_oos_trades": min_trades,
                 "critic_must_approve": True,
                 "final_holdout_must_remain_hidden_until_iterations_finish": True,
+                "same_cost_model_for_all_candidates": True,
                 "stable_branch_is_immutable": True,
             },
         }
@@ -301,6 +343,8 @@ async def run_autonomous_research(
                     warmup_bars,
                     test_bars,
                     min_trades,
+                    fee_bps,
+                    slippage_bps,
                 )
             else:
                 signal_filter = None
@@ -316,6 +360,8 @@ async def run_autonomous_research(
                     warmup_bars,
                     test_bars,
                     min_trades,
+                    fee_bps,
+                    slippage_bps,
                 )
 
             champion_score = float(champion.get("robustness_score", float("-inf")))
@@ -368,7 +414,13 @@ async def run_autonomous_research(
             )
             outcomes.append(evaluation)
 
-    final_holdout = _evaluate_final_holdout(df, champion, development_end)
+    final_holdout = _evaluate_final_holdout(
+        df,
+        champion,
+        development_end,
+        fee_bps,
+        slippage_bps,
+    )
     return {
         "symbol": symbol,
         "interval": interval,
@@ -378,6 +430,7 @@ async def run_autonomous_research(
             "development_bars": len(development_df),
             "final_holdout_bars": holdout_bars,
             "holdout_exposed_during_research": False,
+            "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
         },
         "champion": champion,
         "parameter_sensitivity": sensitivity,
