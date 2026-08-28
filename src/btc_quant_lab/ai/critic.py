@@ -5,7 +5,6 @@ import re
 
 from btc_quant_lab.ai.minimax import MiniMaxClient
 
-
 SYSTEM = """
 Eres el agente crítico independiente de Bitcoin Quant Research Lab.
 No propones estrategias. Tu única tarea es revisar si un candidato merece sustituir al champion.
@@ -26,7 +25,7 @@ def _extract_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.S)
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if not match:
             raise
         return json.loads(match.group(0))
