@@ -1,5 +1,5 @@
-from itertools import product
 import math
+from itertools import product
 
 import polars as pl
 
@@ -57,4 +57,4 @@ def optimize(
                 "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
             }
         )
-    return sorted(rows, key=lambda x: x["score"], reverse=True)
+    return sorted(rows, key=lambda row: row["score"], reverse=True)
