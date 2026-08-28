@@ -243,3 +243,145 @@ def walk_forward(
         "aggregate": aggregate,
         "selection_frequency": dict(selected.most_common()),
     }
+
+
+def purged_walk_forward(
+    df: pl.DataFrame,
+    train_bars: int = 1095,
+    test_bars: int = 365,
+    purge_bars: int = 5,
+    embargo_bars: int = 5,
+    step_bars: int | None = None,
+    min_train_trades: int = 10,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+) -> dict:
+    """Walk-forward with a purged train tail and embargo before each test window.
+
+    `purge_bars` removes the most recent bars from parameter selection. `embargo_bars`
+    then inserts an untouched gap before OOS evaluation. This reduces boundary leakage
+    and serial dependence between train and test observations.
+    """
+    step_bars = step_bars or test_bars
+    if train_bars < 100 or test_bars < 30 or step_bars < 1:
+        raise ValueError("walk-forward windows are too small")
+    if purge_bars < 0 or embargo_bars < 0:
+        raise ValueError("purge_bars and embargo_bars must be non-negative")
+    if purge_bars >= train_bars - 100:
+        raise ValueError("purge_bars leaves too little training history")
+
+    required = train_bars + embargo_bars + test_bars
+    if len(df) < required:
+        return {
+            "windows": [],
+            "aggregate": metrics_from_trades([]),
+            "selection_frequency": {},
+            "error": "not_enough_history",
+        }
+
+    timestamps = df["ts"].to_list()
+    windows: list[dict] = []
+    all_oos_trades: list[Trade] = []
+    selected: Counter[str] = Counter()
+    train_start = 0
+
+    while train_start + required <= len(df):
+        nominal_train_end = train_start + train_bars
+        effective_train_end = nominal_train_end - purge_bars
+        test_start = nominal_train_end + embargo_bars
+        test_end = test_start + test_bars
+        train_length = effective_train_end - train_start
+
+        train_df = df.slice(train_start, train_length)
+        ranked = optimize(
+            train_df,
+            min_trades=min_train_trades,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        )
+        if not ranked:
+            break
+
+        best = ranked[0]
+        cfg = _config_from_row(best)
+        selected[_config_key(cfg)] += 1
+        oos_trades = _trades_inside_window(
+            df,
+            cfg,
+            test_start,
+            test_end,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        )
+        oos_metrics = metrics_from_trades(oos_trades)
+        all_oos_trades.extend(oos_trades)
+
+        windows.append(
+            {
+                "train": {
+                    "start": _iso(int(timestamps[train_start])),
+                    "effective_end": _iso(int(timestamps[effective_train_end - 1])),
+                    "nominal_end": _iso(int(timestamps[nominal_train_end - 1])),
+                    "bars_used": train_length,
+                    "purged_bars": purge_bars,
+                },
+                "embargo": {
+                    "bars": embargo_bars,
+                    "start": _iso(int(timestamps[nominal_train_end])),
+                    "end": (
+                        _iso(int(timestamps[test_start - 1]))
+                        if embargo_bars > 0
+                        else None
+                    ),
+                },
+                "test": {
+                    "start": _iso(int(timestamps[test_start])),
+                    "end": _iso(int(timestamps[test_end - 1])),
+                    "bars": test_bars,
+                },
+                "selected_config": asdict(cfg),
+                "in_sample": {
+                    key: best.get(key)
+                    for key in (
+                        "trades",
+                        "win_rate",
+                        "compounded_return_pct",
+                        "expectancy_pct",
+                        "profit_factor",
+                        "max_drawdown_pct",
+                        "score",
+                    )
+                },
+                "out_of_sample": oos_metrics,
+            }
+        )
+        train_start += step_bars
+
+    aggregate = metrics_from_trades(all_oos_trades)
+    profitable_windows = sum(
+        1
+        for window in windows
+        if window["out_of_sample"]["compounded_return_pct"] > 0
+    )
+    aggregate["windows"] = len(windows)
+    aggregate["profitable_windows"] = profitable_windows
+    aggregate["profitable_windows_pct"] = (
+        profitable_windows * 100.0 / len(windows) if windows else None
+    )
+
+    return {
+        "method": {
+            "type": "purged_embargo_walk_forward",
+            "train_bars": train_bars,
+            "test_bars": test_bars,
+            "purge_bars": purge_bars,
+            "embargo_bars": embargo_bars,
+            "step_bars": step_bars,
+            "min_train_trades": min_train_trades,
+            "fee_bps": fee_bps,
+            "slippage_bps": slippage_bps,
+        },
+        "windows": windows,
+        "aggregate": aggregate,
+        "selection_frequency": dict(selected.most_common()),
+    }
