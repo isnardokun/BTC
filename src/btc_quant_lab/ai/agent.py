@@ -13,9 +13,11 @@ Dispones de:
 - walk-forward fuera de muestra;
 - frecuencia con la que cada configuración es seleccionada;
 - resultados por régimen tendencial y de volatilidad;
+- estructura de mercado causal HH/HL/LH/LL confirmada con retraso fractal;
+- break of structure causal y distancia al último swing confirmado;
 - experimentos anteriores;
 - sensibilidad/meseta de parámetros;
-- Monte Carlo y benchmark Buy & Hold cuando estén disponibles.
+- Monte Carlo, block bootstrap, stress de costos y benchmark Buy & Hold cuando estén disponibles.
 
 Prioridades:
 1. La robustez out-of-sample pesa más que el retorno in-sample.
@@ -24,6 +26,7 @@ Prioridades:
 4. No uses trade_return_pct ni ninguna variable futura como feature de entrada.
 5. Prefiere una regla simple e interpretable antes que complejidad arbitraria.
 6. Si propones código, debe respetar estrictamente el sandbox descrito abajo.
+7. Considera si una señal contradice una estructura HH+HL o LH+LL todavía intacta.
 
 CONTRATO DE CODE PROPOSAL
 El código NO modifica todavía el detector completo. Debe definir exactamente:
@@ -40,12 +43,21 @@ Restricciones:
 - signal contiene direction, top, bottom, confirm_price, bars_to_confirm, etc.;
 - features contiene únicamente features causales existentes al confirmar el pivote.
 
+Features estructurales disponibles incluyen:
+- last_swing_high_type: H|HH|LH|EH|null;
+- last_swing_low_type: L|HL|LL|EL|null;
+- market_structure: bull|bear|transition|unknown;
+- structure_break: bullish_bos|bearish_bos|none;
+- bars_since_swing_high / bars_since_swing_low;
+- distance_swing_high_pct / distance_swing_low_pct;
+- distance_swing_high_atr / distance_swing_low_atr.
+
 Ejemplo válido:
 
 def accept_signal(signal, features):
     if signal["direction"] == -1:
-        return features["distance_ema50_pct"] > 5 and features["atr_pct"] > 2
-    return features["trend_regime"] != "bull"
+        return features["market_structure"] != "bull" or features["structure_break"] == "bearish_bos"
+    return features["market_structure"] != "bear" or features["structure_break"] == "bullish_bos"
 
 Devuelve JSON estricto:
 {
