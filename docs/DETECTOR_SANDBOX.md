@@ -2,26 +2,32 @@
 
 ## Propósito
 
-El sandbox AST existente permite a la IA modificar únicamente una política de aceptación de señales. El sandbox de proceso permite un nivel superior: un fork puede implementar un detector completo en `detector_variant.py`.
+El sandbox AST existente permite a la IA modificar una política de aceptación de señales. El sandbox de proceso permite un nivel superior: un fork puede implementar un detector completo en `detector_variant.py`.
 
 Ese código **no se ejecuta directamente en el host**.
 
-## Requisitos
-
-En CachyOS / Arch:
+## Preparación en CachyOS / Arch
 
 ```bash
 bash scripts/setup_detector_sandbox_arch.sh
 ```
 
-Esto instala Podman y descarga explícitamente la imagen confiable configurada. Las ejecuciones posteriores usan:
+El script instala Podman y descarga explícitamente una imagen Python confiable. Las ejecuciones generadas por IA posteriores usan:
 
 ```text
 --pull=never
 --network=none
 ```
 
-por lo que un fork generado por IA no puede provocar una descarga de imagen ni acceder a red durante su ejecución.
+por lo que un fork no puede provocar descargas ni acceder a red durante su ejecución.
+
+La imagen por defecto es:
+
+```text
+docker.io/library/python:3.12-slim
+```
+
+Puede cambiarse explícitamente antes del setup mediante `BQR_DETECTOR_SANDBOX_IMAGE`.
 
 ## Contrato del plugin
 
@@ -62,7 +68,7 @@ El proceso se ejecuta con Podman rootless y:
 
 - red deshabilitada;
 - root filesystem read-only;
-- todas las capabilities eliminadas;
+- capabilities eliminadas;
 - `no-new-privileges`;
 - namespace de usuario rootless;
 - límite de memoria;
@@ -75,13 +81,13 @@ El proceso se ejecuta con Podman rootless y:
 - timeout desde el host;
 - ninguna carpeta personal del host se monta dentro del contenedor.
 
-Esto reduce de forma importante la superficie de riesgo, pero no convierte código no confiable en matemáticamente seguro. La imagen y Podman deben mantenerse actualizados.
+El aislamiento reduce de forma importante la superficie de riesgo, pero Podman y la imagen deben mantenerse actualizados.
 
 ## Defensa contra lookahead
 
-El aislamiento del proceso no basta: un detector podría leer todo el histórico recibido y modificar señales pasadas usando velas futuras.
+El aislamiento del proceso no basta: un detector podría leer todo el histórico recibido y modificar señales pasadas utilizando velas futuras.
 
-Por eso existen dos controles adicionales.
+Por eso hay controles separados.
 
 ### Integridad de mercado
 
@@ -107,14 +113,79 @@ histórico A + futuro B + futuro C
 
 Las señales cuya confirmación pertenecía a `A` deben ser idénticas en todas las ejecuciones posteriores.
 
-Si una señal pasada cambia al añadir futuro, el fork falla la auditoría causal.
+Si una señal pasada cambia al añadir futuro, el fork falla la auditoría causal y se descarta antes del scoring.
 
-## OOS de un detector mutado
+La comprobación vuelve a realizarse al pasar de `development` al histórico completo antes de medir el holdout final. Esto evita que un detector cambie artificialmente su historia solo cuando detecta una longitud de dataset mayor.
 
-`evaluate_detector_fork_oos()` ejecuta cada ventana con un prefijo que termina exactamente al final de ese test. Nunca entrega al detector velas posteriores a la ventana que está evaluando y compara la invariancia de señales entre prefijos consecutivos.
+## Evaluación cuantitativa
 
-Solo después de superar esa capa puede un detector completo compararse con el baseline.
+Un `detector_code` debe superar varias capas:
 
-## Estado
+1. ejecución aislada;
+2. validación de señales contra OHLCV real;
+3. auditoría causal por prefijos;
+4. backtest completo de development;
+5. OOS cronológico ejecutando solo datos disponibles hasta cada ventana;
+6. OOS con zona excluida Purge + Embargo alrededor de las fronteras;
+7. análisis por régimen/estructura;
+8. comparación contra champion;
+9. revisión de un agente crítico independiente;
+10. holdout final oculto durante las iteraciones;
+11. manifest de promoción, sin crear `stable` automáticamente.
 
-La infraestructura de aislamiento, contrato, validación de mercado y auditoría causal está implementada. La siguiente integración es permitir que el agente proponga `proposal_type = detector_code` únicamente cuando `sandbox_ready()` confirme que Podman y la imagen local están disponibles.
+## Deep Detector Research
+
+Este flujo está deliberadamente separado del loop web estable mientras validamos Podman en hardware real.
+
+Después de sincronizar BTC y configurar MiniMax:
+
+```bash
+bash scripts/setup_detector_sandbox_arch.sh
+source .venv/bin/activate
+bqrl-detector-research \
+  --symbol BTCUSDT \
+  --interval 1d \
+  --iterations 3 \
+  --min-trades 10
+```
+
+Cada iteración exige `proposal_type = detector_code`. MiniMax crea un `detector_variant.py`, el sistema lo ejecuta en el contenedor y registra el resultado en:
+
+```text
+experiments/forks/<experiment_id>/
+├── manifest.json
+├── hypothesis.md
+├── detector_variant.py
+└── result.json
+```
+
+Si un candidato se convierte en champion, el holdout final se evalúa una sola vez al terminar las iteraciones. El resultado genera además un manifest en:
+
+```text
+experiments/promotions/<promotion_id>.json
+```
+
+`eligible_for_review` sigue significando únicamente **candidato para revisión**, no estrategia aprobada para operar.
+
+## Estado actual
+
+Implementado:
+
+- sandbox rootless de proceso;
+- contrato de plugin `detect(candles, config)`;
+- validación de mercado;
+- auditoría prefix-invariance;
+- OOS del detector mutado;
+- OOS con Purge + Embargo;
+- research loop autónomo exclusivo para `detector_code`;
+- crítico independiente;
+- holdout final con auditoría development→full;
+- manifest de promoción.
+
+Pendiente antes de fusionarlo con el botón principal de la UI:
+
+- ejecutar pruebas reales de Podman en CachyOS;
+- medir tiempos/consumo de 1, 3 y 10 iteraciones;
+- revisar al menos varios forks generados por MiniMax;
+- endurecer límites si la telemetría local lo aconseja;
+- después integrar el modo profundo en la interfaz web.
