@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -10,8 +11,8 @@ from pathlib import Path
 
 import polars as pl
 
-from btc_quant_lab.models import PivotConfig, PivotSignal
-from btc_quant_lab.research.backtest import reversal_backtest
+from btc_quant_lab.models import PivotConfig, PivotSignal, Trade
+from btc_quant_lab.research.backtest import metrics_from_trades, reversal_backtest
 
 FORKS_ROOT = Path("experiments/forks")
 DEFAULT_IMAGE = "docker.io/library/python:3.12-slim"
@@ -41,6 +42,26 @@ def podman_available() -> bool:
     return shutil.which("podman") is not None
 
 
+def podman_image_available(image: str = DEFAULT_IMAGE) -> bool:
+    executable = shutil.which("podman")
+    if executable is None:
+        return False
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed trusted executable and argv, no shell
+            [executable, "image", "exists", image],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return completed.returncode == 0
+
+
+def sandbox_ready(image: str = DEFAULT_IMAGE) -> bool:
+    return podman_available() and podman_image_available(image)
+
+
 def build_podman_command(
     fork_directory: Path,
     request_path: Path,
@@ -50,6 +71,7 @@ def build_podman_command(
     memory_mb: int = 512,
     cpus: float = 1.0,
     pids_limit: int = 64,
+    podman_executable: str = "podman",
 ) -> list[str]:
     if memory_mb < 128 or memory_mb > 4096:
         raise ValueError("memory_mb must be between 128 and 4096")
@@ -59,7 +81,7 @@ def build_podman_command(
         raise ValueError("pids_limit must be between 16 and 512")
 
     return [
-        "podman",
+        podman_executable,
         "run",
         "--rm",
         "--pull=never",
@@ -129,17 +151,82 @@ def validate_detector_result(payload: dict) -> list[PivotSignal]:
         except (KeyError, TypeError, ValueError) as exc:
             raise DetectorSandboxError(f"invalid sandbox signal: {exc}") from exc
 
+        numeric = (signal.top, signal.bottom, signal.confirm_price)
+        if not all(math.isfinite(value) for value in numeric):
+            raise DetectorSandboxError("signal prices must be finite")
         if signal.direction not in {-1, 1}:
             raise DetectorSandboxError("direction must be -1 or 1")
         if signal.top < signal.bottom:
             raise DetectorSandboxError("signal top cannot be below bottom")
         if signal.candidate_ts > signal.ts:
             raise DetectorSandboxError("candidate_ts cannot be after confirmation ts")
+        if signal.bars_to_confirm < 0:
+            raise DetectorSandboxError("bars_to_confirm cannot be negative")
         if signal.ts < previous_ts:
             raise DetectorSandboxError("signals must be sorted by ts")
         previous_ts = signal.ts
         signals.append(signal)
     return signals
+
+
+def validate_signals_against_market(
+    df: pl.DataFrame,
+    signals: list[PivotSignal],
+    price_tolerance: float = 1e-8,
+) -> None:
+    timestamps = [int(value) for value in df["ts"].to_list()]
+    index_by_ts = {timestamp: i for i, timestamp in enumerate(timestamps)}
+    close_by_ts = {
+        int(timestamp): float(close)
+        for timestamp, close in zip(timestamps, df["close"].to_list(), strict=True)
+    }
+
+    for signal in signals:
+        if signal.ts not in index_by_ts:
+            raise DetectorSandboxError("signal confirmation timestamp is not a market candle")
+        if signal.candidate_ts not in index_by_ts:
+            raise DetectorSandboxError("signal candidate timestamp is not a market candle")
+        candidate_index = index_by_ts[signal.candidate_ts]
+        confirmation_index = index_by_ts[signal.ts]
+        expected_bars = confirmation_index - candidate_index
+        if expected_bars != signal.bars_to_confirm:
+            raise DetectorSandboxError("bars_to_confirm does not match market timestamps")
+
+        close_price = close_by_ts[signal.ts]
+        tolerance = max(price_tolerance, abs(close_price) * price_tolerance)
+        if abs(signal.confirm_price - close_price) > tolerance:
+            raise DetectorSandboxError(
+                "confirm_price must equal the close of the confirmation candle"
+            )
+
+
+def _signal_signature(signal: PivotSignal) -> tuple:
+    return (
+        signal.ts,
+        signal.direction,
+        round(signal.top, 10),
+        round(signal.bottom, 10),
+        signal.candidate_ts,
+        round(signal.confirm_price, 10),
+        signal.bars_to_confirm,
+    )
+
+
+def assert_prefix_causal(
+    earlier_signals: list[PivotSignal],
+    later_signals: list[PivotSignal],
+    earlier_end_ts: int,
+) -> None:
+    earlier = [_signal_signature(signal) for signal in earlier_signals]
+    later_prefix = [
+        _signal_signature(signal)
+        for signal in later_signals
+        if signal.ts <= earlier_end_ts
+    ]
+    if earlier != later_prefix:
+        raise DetectorSandboxError(
+            "causality audit failed: past signals changed after future candles were added"
+        )
 
 
 def run_detector_fork(
@@ -156,8 +243,13 @@ def run_detector_fork(
     The trusted container image must already exist locally. The function uses
     `--pull=never`, so executing an AI fork never triggers a network image pull.
     """
-    if not podman_available():
+    executable = shutil.which("podman")
+    if executable is None:
         raise DetectorSandboxError("podman is required for full detector sandbox execution")
+    if not podman_image_available(image):
+        raise DetectorSandboxError(
+            f"sandbox image is not available locally: {image}; run the explicit setup first"
+        )
     if timeout_seconds < 1 or timeout_seconds > 300:
         raise ValueError("timeout_seconds must be between 1 and 300")
 
@@ -181,9 +273,10 @@ def run_detector_fork(
             image=image,
             memory_mb=memory_mb,
             cpus=cpus,
+            podman_executable=executable,
         )
         try:
-            completed = subprocess.run(  # noqa: S603 - fixed argv, no shell; container is the security boundary
+            completed = subprocess.run(  # noqa: S603 - argv only; isolated rootless container is the boundary
                 command,
                 check=False,
                 capture_output=True,
@@ -202,7 +295,154 @@ def run_detector_fork(
             payload = json.loads(result_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise DetectorSandboxError("detector sandbox returned invalid JSON") from exc
-        return validate_detector_result(payload)
+        signals = validate_detector_result(payload)
+        validate_signals_against_market(df, signals)
+        return signals
+
+
+def audit_detector_causality(
+    df: pl.DataFrame,
+    fork_id: str,
+    config: PivotConfig | dict | None = None,
+    checkpoints: int = 4,
+    min_prefix_bars: int = 200,
+    **sandbox_kwargs,
+) -> dict:
+    """Run prefix-invariance checks to detect historical lookahead in a detector fork."""
+    if checkpoints < 2 or checkpoints > 10:
+        raise ValueError("checkpoints must be between 2 and 10")
+    if len(df) < min_prefix_bars + checkpoints:
+        raise DetectorSandboxError("not enough candles for detector causality audit")
+
+    remaining = len(df) - min_prefix_bars
+    sizes = sorted(
+        {
+            min_prefix_bars + round(remaining * i / checkpoints)
+            for i in range(checkpoints + 1)
+        }
+    )
+    previous_signals: list[PivotSignal] | None = None
+    previous_end_ts: int | None = None
+    runs: list[dict] = []
+
+    for size in sizes:
+        prefix = df.slice(0, size)
+        signals = run_detector_fork(
+            prefix,
+            fork_id,
+            config=config,
+            **sandbox_kwargs,
+        )
+        if previous_signals is not None and previous_end_ts is not None:
+            assert_prefix_causal(previous_signals, signals, previous_end_ts)
+        previous_signals = signals
+        previous_end_ts = int(prefix["ts"][-1])
+        runs.append({"bars": size, "signals": len(signals), "end_ts": previous_end_ts})
+
+    return {
+        "passed": True,
+        "method": "prefix_invariance",
+        "checkpoints": len(runs),
+        "runs": runs,
+    }
+
+
+def _trades_in_window(
+    trades: list[Trade],
+    start_ts: int,
+    end_ts: int,
+) -> list[Trade]:
+    return [
+        trade
+        for trade in trades
+        if int(trade.entry_ts) >= start_ts and int(trade.exit_ts) <= end_ts
+    ]
+
+
+def evaluate_detector_fork_oos(
+    df: pl.DataFrame,
+    fork_id: str,
+    config: PivotConfig | dict | None = None,
+    warmup_bars: int = 1095,
+    test_bars: int = 365,
+    step_bars: int | None = None,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+    **sandbox_kwargs,
+) -> dict:
+    """Evaluate a mutated detector on chronological prefixes and OOS windows.
+
+    Each test window executes the fork only with candles available up to that window's end.
+    Consecutive prefix outputs are compared, so changing past signals is rejected as lookahead.
+    """
+    step_bars = step_bars or test_bars
+    if warmup_bars < 100 or test_bars < 30 or step_bars < 1:
+        raise ValueError("evaluation windows are too small")
+    if len(df) < warmup_bars + test_bars:
+        return {
+            "windows": [],
+            "aggregate": metrics_from_trades([]),
+            "error": "not_enough_history",
+        }
+
+    timestamps = [int(value) for value in df["ts"].to_list()]
+    windows: list[dict] = []
+    all_trades: list[Trade] = []
+    test_start = warmup_bars
+    previous_signals: list[PivotSignal] | None = None
+    previous_end_ts: int | None = None
+
+    while test_start + test_bars <= len(df):
+        test_end = test_start + test_bars
+        prefix = df.slice(0, test_end)
+        signals = run_detector_fork(
+            prefix,
+            fork_id,
+            config=config,
+            **sandbox_kwargs,
+        )
+        if previous_signals is not None and previous_end_ts is not None:
+            assert_prefix_causal(previous_signals, signals, previous_end_ts)
+
+        trades, _ = reversal_backtest(
+            signals,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        )
+        start_ts = timestamps[test_start]
+        end_ts = timestamps[test_end - 1]
+        oos_trades = _trades_in_window(trades, start_ts, end_ts)
+        all_trades.extend(oos_trades)
+        windows.append(
+            {
+                "test": {"start_ts": start_ts, "end_ts": end_ts, "bars": test_bars},
+                "metrics": metrics_from_trades(oos_trades),
+            }
+        )
+        previous_signals = signals
+        previous_end_ts = end_ts
+        test_start += step_bars
+
+    aggregate = metrics_from_trades(all_trades)
+    profitable = sum(
+        1 for window in windows if window["metrics"]["compounded_return_pct"] > 0
+    )
+    aggregate["windows"] = len(windows)
+    aggregate["profitable_windows"] = profitable
+    aggregate["profitable_windows_pct"] = (
+        profitable * 100.0 / len(windows) if windows else None
+    )
+    return {
+        "method": {
+            "type": "detector_fork_prefix_oos",
+            "warmup_bars": warmup_bars,
+            "test_bars": test_bars,
+            "step_bars": step_bars,
+            "prefix_causality_enforced": True,
+        },
+        "windows": windows,
+        "aggregate": aggregate,
+    }
 
 
 def evaluate_detector_fork(
