@@ -10,13 +10,20 @@ from btc_quant_lab.ai.process_sandbox import (
     run_detector_fork,
     sandbox_ready,
 )
+from btc_quant_lab.ai.sandbox_image import configured_detector_image, detector_image_metadata
 from btc_quant_lab.models import PivotConfig, PivotSignal, Trade
 from btc_quant_lab.research.backtest import metrics_from_trades, reversal_backtest
 
 
 def full_detector_sandbox_ready() -> bool:
-    """Return whether the explicitly prepared local Podman sandbox can execute forks."""
-    return sandbox_ready()
+    """Return whether the pinned/prepared local Podman sandbox can execute forks."""
+    return sandbox_ready(configured_detector_image())
+
+
+def full_detector_sandbox_metadata() -> dict:
+    metadata = detector_image_metadata()
+    metadata["ready"] = sandbox_ready(metadata["configured_image"])
+    return metadata
 
 
 def _trades_inside(trades: list[Trade], start_ts: int, end_ts: int) -> list[Trade]:
@@ -38,15 +45,11 @@ def evaluate_detector_boundary_gap_oos(
     fee_bps: float,
     slippage_bps: float,
     step_bars: int | None = None,
+    image: str | None = None,
 ) -> dict:
-    """Evaluate a fixed detector with an excluded zone around each OOS boundary.
-
-    Full-detector code is not re-optimized inside each train window, so `purge_bars`
-    is reported as a deliberately excluded pre-boundary zone while `embargo_bars`
-    delays the OOS start. No trade touching either excluded zone is counted.
-    Prefix invariance remains enforced between executions.
-    """
+    """Evaluate a fixed detector with an excluded zone around each OOS boundary."""
     step_bars = step_bars or test_bars
+    image = image or configured_detector_image()
     if warmup_bars < 100 or test_bars < 30 or step_bars < 1:
         raise ValueError("evaluation windows are too small")
     if purge_bars < 0 or embargo_bars < 0:
@@ -70,7 +73,7 @@ def evaluate_detector_boundary_gap_oos(
         test_start = anchor + embargo_bars
         test_end = test_start + test_bars
         prefix = df.slice(0, test_end)
-        signals = run_detector_fork(prefix, fork_id, config=cfg)
+        signals = run_detector_fork(prefix, fork_id, config=cfg, image=image)
         if previous_signals is not None and previous_end_ts is not None:
             assert_prefix_causal(previous_signals, signals, previous_end_ts)
 
@@ -118,6 +121,7 @@ def evaluate_detector_boundary_gap_oos(
             "purge_bars": purge_bars,
             "embargo_bars": embargo_bars,
             "prefix_causality_enforced": True,
+            "sandbox_image": image,
         },
         "windows": windows,
         "aggregate": aggregate,
@@ -135,14 +139,9 @@ def collect_detector_candidate_evidence(
     fee_bps: float,
     slippage_bps: float,
 ) -> tuple[list[PivotSignal], list[Trade], dict, dict, dict, dict]:
-    """Execute and audit a full-detector fork before quantitative promotion review.
-
-    Returns `(signals, trades, full_metrics, oos, boundary_gap_oos,
-    causality_audit)`. The fork is rejected before scoring if the process sandbox is
-    unavailable, market output is invalid, or historical signals change when future
-    candles are appended.
-    """
-    if not full_detector_sandbox_ready():
+    """Execute and audit a full-detector fork before quantitative promotion review."""
+    image = configured_detector_image()
+    if not sandbox_ready(image):
         raise DetectorSandboxError(
             "full detector sandbox is not ready; run scripts/setup_detector_sandbox_arch.sh"
         )
@@ -157,8 +156,10 @@ def collect_detector_candidate_evidence(
         config=cfg,
         checkpoints=3,
         min_prefix_bars=min_prefix_bars,
+        image=image,
     )
-    signals = run_detector_fork(df, fork_id, config=cfg)
+    causality["sandbox_image"] = detector_image_metadata()
+    signals = run_detector_fork(df, fork_id, config=cfg, image=image)
     trades, full_metrics = reversal_backtest(
         signals,
         fee_bps=fee_bps,
@@ -173,7 +174,9 @@ def collect_detector_candidate_evidence(
         step_bars=test_bars,
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
+        image=image,
     )
+    oos.setdefault("method", {})["sandbox_image"] = image
     boundary_gap_oos = evaluate_detector_boundary_gap_oos(
         df,
         fork_id,
@@ -185,5 +188,6 @@ def collect_detector_candidate_evidence(
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
         step_bars=test_bars,
+        image=image,
     )
     return signals, trades, full_metrics, oos, boundary_gap_oos, causality
