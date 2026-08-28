@@ -8,6 +8,7 @@ import polars as pl
 
 from btc_quant_lab.models import PivotConfig, Trade
 from btc_quant_lab.research.backtest import metrics_from_trades, reversal_backtest
+from btc_quant_lab.research.filters import filter_signals
 from btc_quant_lab.research.optimizer import optimize
 from btc_quant_lab.research.pivots import detect_pivots
 
@@ -29,10 +30,12 @@ def _trades_inside_window(
     cfg: PivotConfig,
     test_start: int,
     test_end: int,
+    signal_filter: dict | None = None,
 ) -> list[Trade]:
     timestamps = df["ts"].to_list()
     history_to_test_end = df.slice(0, test_end)
     signals = detect_pivots(history_to_test_end, cfg)
+    signals = filter_signals(history_to_test_end, signals, signal_filter)
     trades, _ = reversal_backtest(signals)
     test_start_ts = int(timestamps[test_start])
     test_end_ts = int(timestamps[test_end - 1])
@@ -49,6 +52,7 @@ def evaluate_fixed_config(
     warmup_bars: int = 1095,
     test_bars: int = 365,
     step_bars: int | None = None,
+    signal_filter: dict | None = None,
 ) -> dict:
     """Evaluate one frozen configuration on chronological windows after a warmup period."""
     step_bars = step_bars or test_bars
@@ -57,6 +61,7 @@ def evaluate_fixed_config(
     if len(df) < warmup_bars + test_bars:
         return {
             "config": asdict(cfg),
+            "filter": signal_filter,
             "windows": [],
             "aggregate": metrics_from_trades([]),
             "error": "not_enough_history",
@@ -69,7 +74,13 @@ def evaluate_fixed_config(
 
     while test_start + test_bars <= len(df):
         test_end = test_start + test_bars
-        oos_trades = _trades_inside_window(df, cfg, test_start, test_end)
+        oos_trades = _trades_inside_window(
+            df,
+            cfg,
+            test_start,
+            test_end,
+            signal_filter=signal_filter,
+        )
         metrics = metrics_from_trades(oos_trades)
         all_trades.extend(oos_trades)
         windows.append(
@@ -94,6 +105,7 @@ def evaluate_fixed_config(
 
     return {
         "config": asdict(cfg),
+        "filter": signal_filter,
         "method": {
             "warmup_bars": warmup_bars,
             "test_bars": test_bars,
