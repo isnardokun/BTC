@@ -9,10 +9,11 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 3. `docs/RESEARCH.md`
 4. `docs/WALK_FORWARD.md`
 5. `docs/AI_RESEARCHER.md`
-6. `docs/PROMOTION.md`
-7. `docs/ROADMAP.md`
-8. `experiments/ledger.jsonl`
-9. tests
+6. `docs/DETECTOR_SANDBOX.md`
+7. `docs/PROMOTION.md`
+8. `docs/ROADMAP.md`
+9. `experiments/ledger.jsonl`
+10. tests
 
 ## Reglas
 - No usar lookahead ni datos futuros.
@@ -24,16 +25,19 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - Preferir regiones estables de parámetros a un único máximo in-sample.
 - `trade_return_pct` es un label futuro y nunca puede ser una feature de entrada.
 - Un candidato autónomo debe mejorar OOS y ser aprobado por el agente crítico.
-- El sandbox AST actual solo admite políticas `accept_signal(signal, features)`; no convertirlo silenciosamente en ejecución Python arbitraria.
+- El sandbox AST solo admite políticas `accept_signal(signal, features)`; no convertirlo silenciosamente en ejecución Python arbitraria.
+- El sandbox de detector completo debe seguir aislado en Podman rootless, sin red y con límites de recursos.
+- Todo `detector_code` debe pasar validación de mercado y prefix-invariance antes de scoring.
 - El `final_holdout` nunca se entrega al agente proponente ni al crítico durante las iteraciones.
+- Para un detector completo, volver a comprobar prefix-invariance entre development y dataset completo antes de puntuar el holdout.
 - Todos los candidatos de una misma investigación deben usar exactamente el mismo modelo de fees/slippage.
 - La estructura HH/HL/LH/LL debe usar swings confirmados con retraso causal; nunca pivotes perfectos retrospectivos.
 - La referencia Purged+Embargo es evidencia adicional de fragilidad de frontera, no sustituto del holdout final.
-- `eligible_for_review` no equivale a `stable`.
+- `eligible_for_review` no equivale a `stable` ni a autorización para operar.
 
 ## Estado actual
 
-### Detector
+### Detector baseline
 - motores: M1, M3;
 - rangos: R4, R7, R8;
 - `min_bars`: 2, 3, 4, 5;
@@ -60,8 +64,7 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - `research/montecarlo.py`: bootstrap IID y por bloques;
 - `research/cost_stress.py`: degradación por fees/slippage;
 - `research/stability.py`: estabilidad temporal/champion decay;
-- `research/promotion.py`: gates y manifest reproducible de promoción;
-- `ai/research_loop.py`: development + OOS + referencia purged/embargo + crítico + holdout final + promotion manifest.
+- `research/promotion.py`: gates y manifest reproducible de promoción.
 
 ### Features estructurales
 - `last_swing_high_type`: H/HH/LH/EH;
@@ -73,14 +76,32 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - barras desde último swing alto/bajo;
 - distancia al último swing en % y ATR.
 
-### IA
-- `ai/agent.py`: investigador que propone;
-- `ai/sandbox.py`: ejecuta código restringido de política de señales;
-- `ai/critic.py`: crítico independiente que revisa OOS, estructura, régimen y purged/embargo;
-- `ai/research_loop.py`: propone → ejecuta → OOS → crítico → acepta/rechaza → holdout final → promotion manifest.
+### IA — loop estable
+- `ai/agent.py`: investigador que propone parámetros/filtro/policy y conoce el contrato `detector_code`;
+- `ai/sandbox.py`: ejecuta código AST restringido de política de señales;
+- `ai/critic.py`: crítico independiente;
+- `ai/research_loop.py`: parámetros/filtros/policy → OOS → regímenes → crítico → holdout → promotion manifest.
+
+### IA — Deep Detector Research
+- `ai/process_sandbox.py`: ejecución de `detector_variant.py` en Podman rootless sin red, read-only y con límites;
+- `ai/detector_runner.py`: contrato `detect(candles, config)` dentro del contenedor;
+- `ai/detector_candidate.py`: causalidad, OOS y boundary-gap Purge+Embargo del detector completo;
+- `ai/detector_research_loop.py`: iteraciones exclusivamente `detector_code` con crítico y holdout oculto;
+- `ai/detector_research_cli.py`: CLI separado del loop web estable;
+- `scripts/setup_detector_sandbox_arch.sh`: preparación explícita de Podman/imagen.
+
+Controles de detector completo:
+- timestamps de confirmación/candidato deben existir en OHLCV;
+- `confirm_price` debe coincidir con el close real;
+- `bars_to_confirm` debe coincidir con distancia real;
+- precios finitos y señales ordenadas;
+- prefix-invariance en development;
+- OOS con prefijos causales;
+- boundary-gap OOS con Purge+Embargo;
+- nueva comprobación development→full antes del holdout.
 
 ### Promoción
-- `experiments/promotions/<id>.json` se genera al final del research loop;
+- `experiments/promotions/<id>.json` se genera al final de los research loops;
 - estados: `eligible_for_review` o `rejected_for_promotion`;
 - nunca se crea/mueve `stable` automáticamente.
 
@@ -96,13 +117,17 @@ bqrl purged-walk-forward --symbol BTCUSDT --interval 1d
 bqrl features --symbol BTCUSDT --interval 1d
 bqrl robustness --symbol BTCUSDT --interval 1d
 bqrl ai-research --symbol BTCUSDT --interval 1d --iterations 3
+bash scripts/setup_detector_sandbox_arch.sh
+bqrl-detector-research --symbol BTCUSDT --interval 1d --iterations 3 --min-trades 10
 ```
 
-## Flujo
+## Flujos
+
+### Estable
 ```text
 baseline
   → hipótesis
-  → parámetros/filtro/código restringido
+  → parámetros/filtro/policy restringida
   → OOS desarrollo
   → regímenes + block bootstrap
   → referencia purged/embargo
@@ -110,13 +135,31 @@ baseline
   → aceptar/rechazar
   → holdout final invisible
   → promotion manifest
-  → revisión explícita
-  → stable (futuro)
+```
+
+### Deep Detector Research
+```text
+baseline
+  → hipótesis detector_code
+  → fork detector_variant.py
+  → Podman rootless
+  → validación OHLCV
+  → prefix-invariance
+  → OOS causal
+  → boundary-gap Purge+Embargo
+  → regímenes
+  → crítico
+  → aceptar/rechazar
+  → auditoría development→full
+  → holdout final invisible
+  → promotion manifest
 ```
 
 ## Próximas prioridades
-1. sandbox de proceso rootless para mutaciones completas del detector;
-2. contrato de plugin para que un fork implemente un detector alternativo sin acceso al host;
-3. validación automática del detector mutado contra baseline, OOS, Purged+Embargo y holdout;
-4. exportador de una variante aprobada a Pine Script;
-5. acción explícita para crear rama/tag `stable` a partir de un manifest aprobado.
+1. hacer smoke/performance test real del Deep Detector Research en CachyOS con Podman (1, 3 y 10 iteraciones);
+2. fijar/registrar de forma reproducible la imagen exacta del sandbox y su ID/digest;
+3. integrar el modo profundo en la UI solo después de pruebas locales satisfactorias;
+4. crear exportador Pine Script para baseline/parámetros y después policy traducible;
+5. para champions `detector_code`, definir contrato de exportación Pine separado: no asumir traducción Python→Pine automática exacta;
+6. añadir acción explícita y revisable para crear rama/tag `stable` únicamente desde un manifest `eligible_for_review` aprobado;
+7. ampliar benchmarks triviales (long-only/EMA) y cobertura API/IA.
