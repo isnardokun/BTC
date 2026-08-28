@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -68,10 +68,17 @@ def validate_sandbox_source(source: str) -> None:
 
     functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
     if len(functions) != 1 or functions[0].name != "accept_signal":
-        raise SandboxPolicyError("source must define exactly one function: accept_signal(signal, features)")
+        raise SandboxPolicyError(
+            "source must define exactly one function: accept_signal(signal, features)"
+        )
     fn = functions[0]
-    if len(fn.args.args) != 2 or [a.arg for a in fn.args.args] != ["signal", "features"]:
-        raise SandboxPolicyError("accept_signal must have exactly (signal, features) arguments")
+    if len(fn.args.args) != 2 or [arg.arg for arg in fn.args.args] != [
+        "signal",
+        "features",
+    ]:
+        raise SandboxPolicyError(
+            "accept_signal must have exactly (signal, features) arguments"
+        )
     if fn.decorator_list:
         raise SandboxPolicyError("decorators are not allowed")
 
@@ -82,17 +89,22 @@ def validate_sandbox_source(source: str) -> None:
             raise SandboxPolicyError("dunder names are not allowed")
         if isinstance(node, ast.Constant):
             if isinstance(node.value, str) and len(node.value) > 128:
-                raise SandboxPolicyError("string constants longer than 128 chars are not allowed")
-            if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-                if abs(float(node.value)) > 1_000_000:
-                    raise SandboxPolicyError("numeric constants above 1e6 are not allowed")
+                raise SandboxPolicyError(
+                    "string constants longer than 128 chars are not allowed"
+                )
+            if (
+                isinstance(node.value, (int, float))
+                and not isinstance(node.value, bool)
+                and abs(float(node.value)) > 1_000_000
+            ):
+                raise SandboxPolicyError("numeric constants above 1e6 are not allowed")
 
 
 def compile_signal_policy(source: str):
     validate_sandbox_source(source)
     namespace: dict = {"__builtins__": {}}
     code = compile(source, "<ai-sandbox>", "exec")
-    exec(code, namespace, namespace)
+    exec(code, namespace, namespace)  # noqa: S102 -- validated restricted AST, no builtins.
     fn = namespace.get("accept_signal")
     if not callable(fn):
         raise SandboxPolicyError("accept_signal was not created")
@@ -120,7 +132,9 @@ def apply_signal_policy(
         try:
             decision = policy(signal_dict, features)
         except Exception as exc:
-            raise SandboxPolicyError(f"policy failed on signal {signal.ts}: {exc}") from exc
+            raise SandboxPolicyError(
+                f"policy failed on signal {signal.ts}: {exc}"
+            ) from exc
         if not isinstance(decision, bool):
             raise SandboxPolicyError("accept_signal must return bool")
         if decision:
@@ -129,7 +143,7 @@ def apply_signal_policy(
 
 
 def _iso(ts_ms: int) -> str:
-    return datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).date().isoformat()
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=UTC).date().isoformat()
 
 
 def evaluate_sandbox_policy(
@@ -172,24 +186,33 @@ def evaluate_sandbox_policy(
         start_ts = int(timestamps[test_start])
         end_ts = int(timestamps[test_end - 1])
         oos = [
-            t for t in trades
-            if int(t.entry_ts) >= start_ts and int(t.exit_ts) <= end_ts
+            trade
+            for trade in trades
+            if int(trade.entry_ts) >= start_ts and int(trade.exit_ts) <= end_ts
         ]
         metrics = metrics_from_trades(oos)
         all_oos_trades.extend(oos)
         windows.append(
             {
-                "test": {"start": _iso(start_ts), "end": _iso(end_ts), "bars": test_bars},
+                "test": {
+                    "start": _iso(start_ts),
+                    "end": _iso(end_ts),
+                    "bars": test_bars,
+                },
                 "metrics": metrics,
             }
         )
         test_start += step_bars
 
     aggregate = metrics_from_trades(all_oos_trades)
-    profitable = sum(1 for w in windows if w["metrics"]["compounded_return_pct"] > 0)
+    profitable = sum(
+        1 for window in windows if window["metrics"]["compounded_return_pct"] > 0
+    )
     aggregate["windows"] = len(windows)
     aggregate["profitable_windows"] = profitable
-    aggregate["profitable_windows_pct"] = profitable * 100.0 / len(windows) if windows else None
+    aggregate["profitable_windows_pct"] = (
+        profitable * 100.0 / len(windows) if windows else None
+    )
     return {
         "method": {
             "warmup_bars": warmup_bars,
