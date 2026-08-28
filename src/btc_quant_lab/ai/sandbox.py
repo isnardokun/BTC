@@ -43,7 +43,6 @@ _ALLOWED_NODES = {
     ast.Mult,
     ast.Div,
     ast.Mod,
-    ast.Pow,
     ast.Compare,
     ast.Eq,
     ast.NotEq,
@@ -81,6 +80,12 @@ def validate_sandbox_source(source: str) -> None:
             raise SandboxPolicyError(f"AST node not allowed: {type(node).__name__}")
         if isinstance(node, ast.Name) and node.id.startswith("__"):
             raise SandboxPolicyError("dunder names are not allowed")
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, str) and len(node.value) > 128:
+                raise SandboxPolicyError("string constants longer than 128 chars are not allowed")
+            if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+                if abs(float(node.value)) > 1_000_000:
+                    raise SandboxPolicyError("numeric constants above 1e6 are not allowed")
 
 
 def compile_signal_policy(source: str):
