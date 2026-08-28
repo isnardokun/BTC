@@ -27,12 +27,13 @@ Prioridades:
 3. Una hipótesis debe explicar un patrón observado en fallos o éxitos.
 4. No uses trade_return_pct ni ninguna variable futura como feature de entrada.
 5. Prefiere una regla simple e interpretable antes que complejidad arbitraria.
-6. Si propones código, debe respetar estrictamente el sandbox descrito abajo.
+6. Si propones código, respeta el contrato del sandbox correspondiente.
 7. Considera si una señal contradice una estructura HH+HL o LH+LL todavía intacta.
 8. Usa signal_context y trend_contradiction_score como hipótesis, no como dogmas: deben demostrar mejora OOS.
+9. Solo puedes proponer detector_code si research_protocol.full_detector_sandbox_ready es true.
 
 CONTRATO DE CODE PROPOSAL
-El código NO modifica todavía el detector completo. Debe definir exactamente:
+Para proposal_type = code debes definir exactamente:
 
 def accept_signal(signal, features):
     ...
@@ -46,7 +47,29 @@ Restricciones:
 - signal contiene direction, top, bottom, confirm_price, bars_to_confirm, etc.;
 - features contiene únicamente features causales existentes al confirmar el pivote.
 
-Features estructurales disponibles incluyen:
+CONTRATO DE DETECTOR_CODE
+Para proposal_type = detector_code debes devolver un detector completo que defina exactamente:
+
+def detect(candles, config):
+    ...
+    return signals
+
+Reglas del detector completo:
+- solo puede depender de candles y config;
+- debe ser determinista;
+- no debe leer reloj, variables de entorno, archivos ni fuentes externas;
+- no debe depender de paquetes externos; la imagen base contiene Python estándar;
+- cada señal debe confirmarse usando información disponible hasta su ts;
+- confirm_price debe ser exactamente el close de la vela ts;
+- candidate_ts y ts deben existir en candles;
+- bars_to_confirm debe coincidir con la distancia real entre candidate_ts y ts;
+- señales cronológicamente ordenadas;
+- no puede reescribir señales pasadas cuando se añaden velas futuras.
+
+El sistema ejecuta detector_code en Podman rootless, sin red, rootfs read-only, con límites de recursos,
+y además hace una auditoría prefix-invariance. Un detector que cambie señales pasadas al añadir futuro es rechazado.
+
+Features estructurales disponibles para filtros/code incluyen:
 - last_swing_high_type: H|HH|LH|EH|null;
 - last_swing_low_type: L|HL|LL|EL|null;
 - market_structure: bull|bear|transition|unknown;
@@ -57,7 +80,7 @@ Features estructurales disponibles incluyen:
 - distance_swing_high_pct / distance_swing_low_pct;
 - distance_swing_high_atr / distance_swing_low_atr.
 
-Ejemplo válido:
+Ejemplo válido de policy code:
 
 def accept_signal(signal, features):
     if features["trend_contradiction_score"] >= 2:
@@ -71,7 +94,7 @@ Devuelve JSON estricto:
   "hypothesis": "hipótesis falsable",
   "observed_evidence": ["hecho concreto observado en los resultados"],
   "reasoning_summary": "resumen breve",
-  "proposal_type": "parameters" | "filter" | "code",
+  "proposal_type": "parameters" | "filter" | "code" | "detector_code",
   "parameters": {
     "motor": "M1|M3",
     "range_mode": "R4|R7|R8",
@@ -84,7 +107,7 @@ Devuelve JSON estricto:
     "value": "valor numérico o categórico",
     "applies_to": "all|long|short"
   },
-  "code_proposal": null | "código completo con accept_signal(signal, features)",
+  "code_proposal": null | "código completo para el contrato seleccionado",
   "success_criteria": [
     "criterio cuantitativo in-sample",
     "criterio cuantitativo walk-forward",
@@ -123,11 +146,21 @@ async def propose_iteration(context: dict) -> dict:
         }
     )
 
-    if proposal.get("proposal_type") == "code" and proposal.get("code_proposal"):
+    proposal_type = proposal.get("proposal_type")
+    code_proposal = proposal.get("code_proposal")
+    if proposal_type == "code" and code_proposal:
         create_fork(
             experiment,
             proposal.get("hypothesis", "Sin hipótesis"),
-            proposal["code_proposal"],
+            code_proposal,
+            code_filename="strategy_variant.py",
+        )
+    elif proposal_type == "detector_code" and code_proposal:
+        create_fork(
+            experiment,
+            proposal.get("hypothesis", "Sin hipótesis"),
+            code_proposal,
+            code_filename="detector_variant.py",
         )
 
     return experiment
