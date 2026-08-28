@@ -26,6 +26,8 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - El sandbox actual solo admite políticas `accept_signal(signal, features)` con AST restringido; no convertirlo silenciosamente en ejecución Python arbitraria.
 - El `final_holdout` nunca se entrega al agente proponente ni al crítico durante las iteraciones.
 - Todos los candidatos de una misma investigación deben usar exactamente el mismo modelo de fees/slippage.
+- La estructura HH/HL/LH/LL debe usar swings confirmados con retraso causal; nunca pivotes perfectos retrospectivos.
+- La referencia Purged+Embargo es evidencia adicional de fragilidad de frontera, no sustituto del holdout final.
 
 ## Estado actual
 
@@ -47,18 +49,28 @@ Continuar Bitcoin Quant Research Lab como plataforma cuantitativa auditable para
 - `BQR_FEE_BPS` y `BQR_SLIPPAGE_BPS` se aplican por lado y el backtest descuenta el costo round-trip.
 
 ### Robustez
-- `research/walkforward.py`: train/test cronológico;
-- `research/features.py`: features causales y regímenes;
-- `research/filters.py`: filtros declarativos;
+- `research/walkforward.py`: train/test cronológico + `purged_walk_forward`;
+- `research/features.py`: features causales, regímenes y estructura HH/HL/LH/LL;
+- `research/filters.py`: filtros declarativos incluyendo estructura/BOS;
 - `research/analytics.py`: resultados anuales y Buy & Hold;
 - `research/sensitivity.py`: meseta de parámetros;
-- `research/montecarlo.py`: bootstrap de secuencias de trades;
-- `ai/research_loop.py`: development set + holdout final invisible.
+- `research/montecarlo.py`: bootstrap IID y por bloques;
+- `research/cost_stress.py`: degradación por fees/slippage;
+- `research/stability.py`: estabilidad temporal/champion decay;
+- `ai/research_loop.py`: development set + referencia purged/embargo + holdout final invisible.
+
+### Features estructurales
+- `last_swing_high_type`: H/HH/LH/EH;
+- `last_swing_low_type`: L/HL/LL/EL;
+- `market_structure`: bull/bear/transition/unknown;
+- `structure_break`: bullish_bos/bearish_bos/none;
+- barras desde último swing alto/bajo;
+- distancia al último swing en % y ATR.
 
 ### IA
 - `ai/agent.py`: investigador que propone;
 - `ai/sandbox.py`: ejecuta código restringido de política de señales;
-- `ai/critic.py`: crítico independiente;
+- `ai/critic.py`: crítico independiente que revisa OOS, estructura y purged/embargo;
 - `ai/research_loop.py`: propone → ejecuta → OOS → crítico → acepta/rechaza → holdout final.
 
 ## Comandos de referencia
@@ -69,6 +81,7 @@ uv run ruff check .
 bqrl sync --symbol BTCUSDT --interval 1d
 bqrl optimize --symbol BTCUSDT --interval 1d
 bqrl walk-forward --symbol BTCUSDT --interval 1d
+bqrl purged-walk-forward --symbol BTCUSDT --interval 1d
 bqrl features --symbol BTCUSDT --interval 1d
 bqrl robustness --symbol BTCUSDT --interval 1d
 bqrl ai-research --symbol BTCUSDT --interval 1d --iterations 3
@@ -76,14 +89,20 @@ bqrl ai-research --symbol BTCUSDT --interval 1d --iterations 3
 
 ## Flujo
 ```text
-baseline → hipótesis → parámetros/filtro/código restringido → OOS desarrollo → crítico → aceptar/rechazar → holdout final
+baseline
+  → hipótesis
+  → parámetros/filtro/código restringido
+  → OOS desarrollo
+  → referencia purged/embargo
+  → crítico
+  → aceptar/rechazar
+  → holdout final invisible
 ```
 
 ## Próximas prioridades
-1. purged/embargo validation para selección basada en features;
-2. bootstrap por bloques/regímenes;
-3. estructura HH/HL/LH/LL explícita;
-4. estabilidad temporal/champion decay;
-5. stress tests de fees/slippage;
-6. sandbox de proceso para mutaciones completas del detector;
-7. promoción asistida a una rama/tag `stable`.
+1. bootstrap y resultados estratificados por régimen/estructura;
+2. scoring explícito de contradicción tendencial de una señal;
+3. promoción asistida de champion con manifest reproducible;
+4. sandbox de proceso para mutaciones completas del detector;
+5. exportador de una variante aprobada a Pine Script;
+6. rama/tag `stable` solo después de pasar holdout y stress tests.
