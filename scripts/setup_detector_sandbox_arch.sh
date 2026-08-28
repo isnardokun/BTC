@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="${BQR_DETECTOR_SANDBOX_IMAGE:-docker.io/library/python:3.12-slim}"
+# Keep this value synchronized with ai/sandbox_image.py and process_sandbox.py.
+# The deep loop currently contains trusted call sites that use this default tag,
+# so custom images are intentionally disabled until every call receives an explicit ID.
+IMAGE="docker.io/library/python:3.12-slim"
 STATE_DIR=".sandbox"
 
 echo "[1/4] Instalando Podman rootless"
@@ -26,7 +29,7 @@ printf '%s\n' "$IMAGE" > "$STATE_DIR/detector_image_name.txt"
 
 echo
 echo "Sandbox preparado."
-echo "Imagen solicitada: $IMAGE"
+echo "Imagen: $IMAGE"
 echo "ID fijado: $IMAGE_ID"
 echo "Estado local: $STATE_DIR/detector_image_id.txt"
-echo "Las ejecuciones usarán ese ID con --pull=never y --network=none."
+echo "El preflight rechazará una ejecución si el tag deja de apuntar a este ID."
