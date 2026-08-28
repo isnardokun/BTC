@@ -22,7 +22,7 @@ from btc_quant_lab.research.montecarlo import bootstrap_trade_paths
 from btc_quant_lab.research.optimizer import optimize
 from btc_quant_lab.research.pivots import detect_pivots
 from btc_quant_lab.research.sensitivity import parameter_sensitivity
-from btc_quant_lab.research.walkforward import walk_forward
+from btc_quant_lab.research.walkforward import purged_walk_forward, walk_forward
 from btc_quant_lab.service import sync_market
 
 app = typer.Typer(no_args_is_help=True)
@@ -90,6 +90,42 @@ def walk_forward_cmd(
     print(json.dumps(result, indent=2))
 
 
+@app.command("purged-walk-forward")
+def purged_walk_forward_cmd(
+    symbol: str = "BTCUSDT",
+    interval: str = "1d",
+    train_bars: int = 1095,
+    test_bars: int = 365,
+    purge_bars: int = 5,
+    embargo_bars: int = 5,
+    min_train_trades: int = 10,
+):
+    df = Store(settings.bqr_db_path).candles(symbol, interval)
+    result = purged_walk_forward(
+        df,
+        train_bars=train_bars,
+        test_bars=test_bars,
+        purge_bars=purge_bars,
+        embargo_bars=embargo_bars,
+        step_bars=test_bars,
+        min_train_trades=min_train_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
+    record_experiment(
+        {
+            "kind": "purged_walk_forward_cli",
+            "symbol": symbol,
+            "interval": interval,
+            "status": "completed",
+            "method": result.get("method"),
+            "aggregate": result.get("aggregate"),
+            "selection_frequency": result.get("selection_frequency"),
+        }
+    )
+    print(json.dumps(result, indent=2))
+
+
 @app.command("features")
 def features_cmd(
     symbol: str = "BTCUSDT",
@@ -113,7 +149,16 @@ def features_cmd(
         slippage_bps=settings.bqr_slippage_bps,
     )
     rows = build_feature_rows(df, signals, trades)
-    print(json.dumps({"cost_model": _costs(), "summary": summarize_feature_outcomes(rows), "rows": rows}, indent=2))
+    print(
+        json.dumps(
+            {
+                "cost_model": _costs(),
+                "summary": summarize_feature_outcomes(rows),
+                "rows": rows,
+            },
+            indent=2,
+        )
+    )
 
 
 @app.command("robustness")
@@ -173,11 +218,24 @@ def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
         fee_bps=settings.bqr_fee_bps,
         slippage_bps=settings.bqr_slippage_bps,
     )
+    train_bars = min(1095, max(365, len(df) // 2))
+    test_bars = min(365, max(90, len(df) // 6))
+    min_trades = max(5, settings.bqr_ai_min_trades // 2)
     wf = walk_forward(
         df,
-        train_bars=min(1095, max(365, len(df) // 2)),
-        test_bars=min(365, max(90, len(df) // 6)),
-        min_train_trades=max(5, settings.bqr_ai_min_trades // 2),
+        train_bars=train_bars,
+        test_bars=test_bars,
+        min_train_trades=min_trades,
+        fee_bps=settings.bqr_fee_bps,
+        slippage_bps=settings.bqr_slippage_bps,
+    )
+    purged_wf = purged_walk_forward(
+        df,
+        train_bars=train_bars,
+        test_bars=test_bars,
+        purge_bars=5,
+        embargo_bars=5,
+        min_train_trades=min_trades,
         fee_bps=settings.bqr_fee_bps,
         slippage_bps=settings.bqr_slippage_bps,
     )
@@ -210,6 +268,12 @@ def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
             "aggregate": wf.get("aggregate"),
             "selection_frequency": wf.get("selection_frequency"),
             "windows": wf.get("windows", [])[-5:],
+        },
+        "purged_walk_forward": {
+            "method": purged_wf.get("method"),
+            "aggregate": purged_wf.get("aggregate"),
+            "selection_frequency": purged_wf.get("selection_frequency"),
+            "windows": purged_wf.get("windows", [])[-5:],
         },
         "feature_outcomes_for_current_best": feature_context,
         "recent_experiments": list_experiments(20),
