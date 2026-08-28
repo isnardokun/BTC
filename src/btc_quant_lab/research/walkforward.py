@@ -31,12 +31,18 @@ def _trades_inside_window(
     test_start: int,
     test_end: int,
     signal_filter: dict | None = None,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> list[Trade]:
     timestamps = df["ts"].to_list()
     history_to_test_end = df.slice(0, test_end)
     signals = detect_pivots(history_to_test_end, cfg)
     signals = filter_signals(history_to_test_end, signals, signal_filter)
-    trades, _ = reversal_backtest(signals)
+    trades, _ = reversal_backtest(
+        signals,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
     test_start_ts = int(timestamps[test_start])
     test_end_ts = int(timestamps[test_end - 1])
     return [
@@ -53,6 +59,8 @@ def evaluate_fixed_config(
     test_bars: int = 365,
     step_bars: int | None = None,
     signal_filter: dict | None = None,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> dict:
     """Evaluate one frozen configuration on chronological windows after a warmup period."""
     step_bars = step_bars or test_bars
@@ -80,6 +88,8 @@ def evaluate_fixed_config(
             test_start,
             test_end,
             signal_filter=signal_filter,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
         )
         metrics = metrics_from_trades(oos_trades)
         all_trades.extend(oos_trades)
@@ -96,7 +106,9 @@ def evaluate_fixed_config(
         test_start += step_bars
 
     aggregate = metrics_from_trades(all_trades)
-    profitable_windows = sum(1 for w in windows if w["metrics"]["net_return_pct"] > 0)
+    profitable_windows = sum(
+        1 for w in windows if w["metrics"]["compounded_return_pct"] > 0
+    )
     aggregate["windows"] = len(windows)
     aggregate["profitable_windows"] = profitable_windows
     aggregate["profitable_windows_pct"] = (
@@ -110,6 +122,8 @@ def evaluate_fixed_config(
             "warmup_bars": warmup_bars,
             "test_bars": test_bars,
             "step_bars": step_bars,
+            "fee_bps": fee_bps,
+            "slippage_bps": slippage_bps,
         },
         "windows": windows,
         "aggregate": aggregate,
@@ -122,12 +136,10 @@ def walk_forward(
     test_bars: int = 365,
     step_bars: int | None = None,
     min_train_trades: int = 10,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> dict:
-    """Select parameters on train windows and evaluate only on subsequent unseen data.
-
-    Defaults are designed for daily BTC: 3 years train, 1 year test, 1 year step.
-    Test windows do not overlap unless the caller explicitly chooses a smaller step.
-    """
+    """Select parameters on train windows and evaluate only on subsequent unseen data."""
     step_bars = step_bars or test_bars
     if train_bars < 100 or test_bars < 30 or step_bars < 1:
         raise ValueError("walk-forward windows are too small")
@@ -151,19 +163,29 @@ def walk_forward(
         test_end = test_start + test_bars
 
         train_df = df.slice(train_start, train_bars)
-        ranked = optimize(train_df, min_trades=min_train_trades)
+        ranked = optimize(
+            train_df,
+            min_trades=min_train_trades,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        )
         if not ranked:
             break
 
         best = ranked[0]
         cfg = _config_from_row(best)
         selected[_config_key(cfg)] += 1
-        oos_trades = _trades_inside_window(df, cfg, test_start, test_end)
+        oos_trades = _trades_inside_window(
+            df,
+            cfg,
+            test_start,
+            test_end,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+        )
         oos_metrics = metrics_from_trades(oos_trades)
         all_oos_trades.extend(oos_trades)
 
-        test_start_ts = int(timestamps[test_start])
-        test_end_ts = int(timestamps[test_end - 1])
         windows.append(
             {
                 "train": {
@@ -172,8 +194,8 @@ def walk_forward(
                     "bars": train_bars,
                 },
                 "test": {
-                    "start": _iso(test_start_ts),
-                    "end": _iso(test_end_ts),
+                    "start": _iso(int(timestamps[test_start])),
+                    "end": _iso(int(timestamps[test_end - 1])),
                     "bars": test_bars,
                 },
                 "selected_config": asdict(cfg),
@@ -183,6 +205,7 @@ def walk_forward(
                         "trades",
                         "win_rate",
                         "net_return_pct",
+                        "compounded_return_pct",
                         "expectancy_pct",
                         "profit_factor",
                         "max_drawdown_pct",
@@ -196,7 +219,9 @@ def walk_forward(
         train_start += step_bars
 
     aggregate = metrics_from_trades(all_oos_trades)
-    profitable_windows = sum(1 for w in windows if w["out_of_sample"]["net_return_pct"] > 0)
+    profitable_windows = sum(
+        1 for w in windows if w["out_of_sample"]["compounded_return_pct"] > 0
+    )
     aggregate["windows"] = len(windows)
     aggregate["profitable_windows"] = profitable_windows
     aggregate["profitable_windows_pct"] = (
@@ -209,6 +234,8 @@ def walk_forward(
             "test_bars": test_bars,
             "step_bars": step_bars,
             "min_train_trades": min_train_trades,
+            "fee_bps": fee_bps,
+            "slippage_bps": slippage_bps,
         },
         "windows": windows,
         "aggregate": aggregate,
