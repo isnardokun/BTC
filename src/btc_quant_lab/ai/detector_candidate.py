@@ -10,19 +10,26 @@ from btc_quant_lab.ai.process_sandbox import (
     run_detector_fork,
     sandbox_ready,
 )
-from btc_quant_lab.ai.sandbox_image import configured_detector_image, detector_image_metadata
+from btc_quant_lab.ai.sandbox_image import (
+    configured_detector_image,
+    detector_image_metadata,
+    runtime_default_matches_pinned,
+)
 from btc_quant_lab.models import PivotConfig, PivotSignal, Trade
 from btc_quant_lab.research.backtest import metrics_from_trades, reversal_backtest
 
 
 def full_detector_sandbox_ready() -> bool:
-    """Return whether the pinned/prepared local Podman sandbox can execute forks."""
-    return sandbox_ready(configured_detector_image())
+    """Return whether every detector call will resolve to the same pinned image."""
+    image = configured_detector_image()
+    return sandbox_ready(image) and runtime_default_matches_pinned()
 
 
 def full_detector_sandbox_metadata() -> dict:
     metadata = detector_image_metadata()
-    metadata["ready"] = sandbox_ready(metadata["configured_image"])
+    metadata["ready"] = sandbox_ready(metadata["configured_image"]) and metadata[
+        "default_runtime_matches_pinned"
+    ]
     return metadata
 
 
@@ -141,9 +148,9 @@ def collect_detector_candidate_evidence(
 ) -> tuple[list[PivotSignal], list[Trade], dict, dict, dict, dict]:
     """Execute and audit a full-detector fork before quantitative promotion review."""
     image = configured_detector_image()
-    if not sandbox_ready(image):
+    if not full_detector_sandbox_ready():
         raise DetectorSandboxError(
-            "full detector sandbox is not ready; run scripts/setup_detector_sandbox_arch.sh"
+            "full detector sandbox is not reproducible; rerun scripts/setup_detector_sandbox_arch.sh"
         )
 
     min_prefix_bars = min(
