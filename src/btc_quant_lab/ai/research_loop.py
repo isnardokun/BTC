@@ -25,7 +25,7 @@ from btc_quant_lab.research.montecarlo import bootstrap_trade_paths
 from btc_quant_lab.research.optimizer import optimize
 from btc_quant_lab.research.pivots import detect_pivots
 from btc_quant_lab.research.sensitivity import parameter_sensitivity
-from btc_quant_lab.research.walkforward import evaluate_fixed_config
+from btc_quant_lab.research.walkforward import evaluate_fixed_config, purged_walk_forward
 
 ALLOWED_MOTORS = {"M1", "M3"}
 ALLOWED_RANGES = {"R4", "R7", "R8"}
@@ -164,7 +164,21 @@ def _evaluate_code_candidate(
     }
 
 
-def _critic_payload(champion: dict, candidate: dict, sensitivity: dict) -> dict:
+def _compact_purged_reference(purged_reference: dict) -> dict:
+    return {
+        "method": purged_reference.get("method"),
+        "aggregate": purged_reference.get("aggregate"),
+        "selection_frequency": purged_reference.get("selection_frequency"),
+        "recent_windows": purged_reference.get("windows", [])[-3:],
+    }
+
+
+def _critic_payload(
+    champion: dict,
+    candidate: dict,
+    sensitivity: dict,
+    purged_reference: dict,
+) -> dict:
     def compact(item: dict) -> dict:
         return {
             "kind": item.get("kind"),
@@ -174,6 +188,7 @@ def _critic_payload(champion: dict, candidate: dict, sensitivity: dict) -> dict:
             "robustness_score": item.get("robustness_score"),
             "full_history": item.get("full_history"),
             "oos_aggregate": item.get("out_of_sample", {}).get("aggregate"),
+            "feature_summary": item.get("feature_summary"),
             "vs_buy_hold": item.get("vs_buy_hold"),
             "monte_carlo": item.get("monte_carlo"),
             "yearly": item.get("yearly"),
@@ -183,7 +198,11 @@ def _critic_payload(champion: dict, candidate: dict, sensitivity: dict) -> dict:
         "champion": compact(champion),
         "candidate": compact(candidate),
         "parameter_sensitivity": sensitivity.get("plateau"),
-        "rule": "approve only if evidence suggests a robust improvement, not merely in-sample optimization",
+        "purged_embargo_reference": _compact_purged_reference(purged_reference),
+        "rule": (
+            "approve only if evidence suggests a robust improvement; penalize boundary-sensitive "
+            "or structure-contradicting rules even when in-sample return improves"
+        ),
     }
 
 
@@ -297,28 +316,49 @@ async def run_autonomous_research(
         slippage_bps=slippage_bps,
     )
 
+    purge_bars = min(10, max(2, test_bars // 30))
+    embargo_bars = purge_bars
+    purged_reference = purged_walk_forward(
+        development_df,
+        train_bars=warmup_bars,
+        test_bars=test_bars,
+        purge_bars=purge_bars,
+        embargo_bars=embargo_bars,
+        step_bars=test_bars,
+        min_train_trades=max(5, min_trades // 2),
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
+
     outcomes: list[dict] = []
     for iteration in range(1, iterations + 1):
         context = {
             "symbol": symbol,
             "interval": interval,
             "iteration": iteration,
-            "objective": "capturar movimientos sostenidos de BTC con señales de reversión robustas fuera de muestra",
+            "objective": (
+                "capturar movimientos sostenidos de BTC con señales de reversión robustas "
+                "fuera de muestra"
+            ),
             "research_protocol": {
                 "development_bars": len(development_df),
                 "final_holdout_bars": holdout_bars,
                 "final_holdout_is_hidden": True,
+                "purge_bars": purge_bars,
+                "embargo_bars": embargo_bars,
                 "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
             },
             "current_champion": champion,
             "top_in_sample": ranked[:10],
             "parameter_sensitivity": sensitivity,
+            "purged_embargo_reference": _compact_purged_reference(purged_reference),
             "recent_experiments": list_experiments(30),
             "rules": {
                 "no_lookahead": True,
                 "candidate_must_beat_champion_out_of_sample": True,
                 "minimum_oos_trades": min_trades,
                 "critic_must_approve": True,
+                "critic_must_consider_purged_embargo_reference": True,
                 "final_holdout_must_remain_hidden_until_iterations_finish": True,
                 "same_cost_model_for_all_candidates": True,
                 "stable_branch_is_immutable": True,
@@ -373,7 +413,12 @@ async def run_autonomous_research(
             if score_improved:
                 try:
                     critic = await review_candidate(
-                        _critic_payload(champion, candidate, sensitivity)
+                        _critic_payload(
+                            champion,
+                            candidate,
+                            sensitivity,
+                            purged_reference,
+                        )
                     )
                     critic_approved = critic.get("verdict") == "approve"
                 except Exception as exc:
@@ -396,7 +441,11 @@ async def run_autonomous_research(
                     "champion_score_before": champion_score,
                     "score_improved": score_improved,
                     "critic": critic,
-                    "decision_rule": "development OOS robustness must improve and independent critic must approve",
+                    "purged_embargo_reference": _compact_purged_reference(purged_reference),
+                    "decision_rule": (
+                        "development OOS robustness must improve; critic must approve after "
+                        "reviewing purged/embargo evidence"
+                    ),
                 }
             )
             outcomes.append(evaluation)
@@ -430,10 +479,13 @@ async def run_autonomous_research(
             "development_bars": len(development_df),
             "final_holdout_bars": holdout_bars,
             "holdout_exposed_during_research": False,
+            "purge_bars": purge_bars,
+            "embargo_bars": embargo_bars,
             "cost_model": {"fee_bps": fee_bps, "slippage_bps": slippage_bps},
         },
         "champion": champion,
         "parameter_sensitivity": sensitivity,
+        "purged_embargo_reference": _compact_purged_reference(purged_reference),
         "evaluations": outcomes,
         "final_holdout": final_holdout,
     }
