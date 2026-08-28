@@ -21,6 +21,7 @@ from btc_quant_lab.research.features import build_feature_rows, summarize_featur
 from btc_quant_lab.research.montecarlo import bootstrap_trade_blocks, bootstrap_trade_paths
 from btc_quant_lab.research.optimizer import optimize
 from btc_quant_lab.research.pivots import detect_pivots
+from btc_quant_lab.research.regime_validation import validate_by_regime
 from btc_quant_lab.research.sensitivity import parameter_sensitivity
 from btc_quant_lab.research.stability import temporal_stability
 from btc_quant_lab.research.walkforward import purged_walk_forward, walk_forward
@@ -191,6 +192,14 @@ def robustness(
             if trades
             else None
         ),
+        "regime_validation": validate_by_regime(
+            df,
+            signals,
+            trades,
+            simulations=min(simulations, 2000),
+            min_bootstrap_trades=8,
+            block_size=4,
+        ),
         "cost_stress": execution_cost_stress(signals),
         "temporal_stability": temporal_stability(
             df,
@@ -341,6 +350,14 @@ async def ai_iterate(symbol: str = "BTCUSDT", interval: str = "1d"):
         )
         feature_context = summarize_feature_outcomes(build_feature_rows(df, signals, trades))
         robustness_context = {
+            "regime_validation": validate_by_regime(
+                df,
+                signals,
+                trades,
+                simulations=1000,
+                min_bootstrap_trades=8,
+                block_size=4,
+            ),
             "block_bootstrap": (
                 bootstrap_trade_blocks(trades, simulations=1000, block_size=4)
                 if trades
